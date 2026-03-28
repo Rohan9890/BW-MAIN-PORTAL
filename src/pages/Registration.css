@@ -1,0 +1,230 @@
+/* One screen, no visible scrollbar */
+.registration-page {
+  height: 100vh;
+  min-height: 100vh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.registration-page .registration-card {
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.registration-page .registration-card::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.registration-card {
+  max-width: 800px;
+  padding: 0.5rem 1.75rem 1.5rem;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.registration-card::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.reg-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+/* Logo smaller on register page */
+.reg-header .logo-img {
+  max-width: 49px;
+}
+
+.reg-header .logo-svg {
+  width: 14px;
+  height: 14px;
+}
+
+.reg-header .btn {
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8125rem;
+}
+
+.reg-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-dark);
+  text-align: center;
+  margin-bottom: 0.25rem;
+}
+
+.reg-subtitle {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: 0.75rem;
+}
+
+.reg-tabs {
+  display: flex;
+  margin-bottom: 0.75rem;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+
+.reg-tab {
+  flex: 1;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  background: var(--white);
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+}
+
+.reg-tab.active {
+  background: #f0f9ff;
+  color: var(--text-dark);
+  font-weight: 500;
+  box-shadow: inset 0 -2px 0 0 var(--primary);
+}
+
+.tab-icon {
+  font-size: 0.875rem;
+}
+
+/* Dropdown switch (single-page registration type selector) */
+.reg-switch {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.reg-switch-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text-dark);
+}
+
+.reg-switch-control {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--white);
+  padding: 0.55rem 0.75rem;
+}
+
+.reg-switch-icon {
+  font-size: 1rem;
+}
+
+.reg-switch-select {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 0.875rem;
+  color: var(--text-dark);
+  cursor: pointer;
+}
+
+.reg-form-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-dark);
+  margin-bottom: 0.5rem;
+}
+
+.reg-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.registration-page .reg-fields .input {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+}
+
+.reg-field-left,
+.reg-field-right,
+.reg-field-left input,
+.reg-field-right input {
+  width: 100%;
+}
+
+.kyc-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-dark);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.35rem;
+}
+
+.kyc-upload {
+  border: 2px dashed #93c5fd;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 0.75rem 1rem;
+  text-align: center;
+  margin-bottom: 0.75rem;
+}
+
+.kyc-cloud {
+  font-size: 1.5rem;
+  color: #93c5fd;
+  margin-bottom: 0.25rem;
+}
+
+.kyc-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-dark);
+  margin-bottom: 0.1rem;
+}
+
+.kyc-hint {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.reg-terms {
+  margin-bottom: 0.75rem;
+  font-size: 0.8125rem;
+  color: var(--text-dark);
+}
+
+.btn-save {
+  width: 100%;
+  max-width: 180px;
+  display: block;
+  margin: 0 auto;
+  padding: 0.5rem 1rem;
+  font-size: 0.8125rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+@media (max-width: 640px) {
+  .reg-fields {
+    grid-template-columns: 1fr;
+  }
+}
