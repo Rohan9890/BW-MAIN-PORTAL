@@ -1,486 +1,521 @@
-﻿import { useMemo, useState } from "react";
-
-const INITIAL_APPS = [
-  {
-    id: 1,
-    name: "Application Management",
-    description: "Software management",
-    category: "DevOps",
-    status: "subscribed",
-    usage: 72,
-  },
-  {
-    id: 2,
-    name: "CRM System",
-    description: "Sales tools",
-    category: "Productivity",
-    status: "subscribed",
-    usage: 85,
-  },
-  {
-    id: 3,
-    name: "Charge Management",
-    description: "Billing and invoices",
-    category: "Finance",
-    status: "subscribed",
-    usage: 53,
-  },
-  {
-    id: 4,
-    name: "Inventory Forecast",
-    description: "Stock predictions",
-    category: "Planning",
-    status: "available",
-    usage: 0,
-  },
-  {
-    id: 5,
-    name: "Compliance Guard",
-    description: "Policy and risk checks",
-    category: "Security",
-    status: "available",
-    usage: 0,
-  },
-];
-
-const RECENT_ACTIVITY = [
-  { id: 1, title: "Subscription renewed", when: "2 days ago" },
-  { id: 2, title: "Opened CRM System", when: "3 days ago" },
-  { id: 3, title: "Profile information updated", when: "5 days ago" },
-];
+﻿import { useState, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 
 export default function Home() {
-  const [apps, setApps] = useState(INITIAL_APPS);
-  const [search, setSearch] = useState("");
-  const [ticketSubject, setTicketSubject] = useState("");
-  const [ticketDetails, setTicketDetails] = useState("");
-  const [ticketSubmitted, setTicketSubmitted] = useState(false);
+  const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showKYCAlert, setShowKYCAlert] = useState(false);
 
-  const filteredApps = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return apps;
-    return apps.filter(
-      (app) =>
-        app.name.toLowerCase().includes(query) ||
-        app.category.toLowerCase().includes(query) ||
-        app.description.toLowerCase().includes(query),
-    );
-  }, [apps, search]);
+  // Mock data
+  const stats = [
+    { label: "Active Apps", value: 5, icon: "⚙️" },
+    { label: "Active Subscriptions", value: 3, icon: "📊" },
+    { label: "My Tickets", value: 8, icon: "🎫" },
+  ];
 
-  const summary = useMemo(() => {
-    const total = apps.length;
-    const subscribed = apps.filter((app) => app.status === "subscribed").length;
-    const usage = apps.reduce((sum, app) => sum + (app.usage || 0), 0);
-    return {
-      total,
-      subscribed,
-      avgUsage: subscribed ? Math.round(usage / subscribed) : 0,
-    };
-  }, [apps]);
+  const usageData = [
+    { date: "Mon", usage: 40 },
+    { date: "Tue", usage: 65 },
+    { date: "Wed", usage: 45 },
+    { date: "Thu", usage: 80 },
+    { date: "Fri", usage: 55 },
+    { date: "Sat", usage: 70 },
+    { date: "Sun", usage: 50 },
+  ];
 
-  const toggleSubscription = (id) => {
-    setApps((prev) =>
-      prev.map((app) =>
-        app.id === id
-          ? {
-              ...app,
-              status: app.status === "subscribed" ? "available" : "subscribed",
-              usage: app.status === "subscribed" ? 0 : 20,
-            }
-          : app,
-      ),
-    );
+  const transactions = [
+    { id: 1, type: "Subscription", amount: 49.99, date: "2024-05-15", status: "Completed" },
+    { id: 2, type: "One-time Payment", amount: 99.99, date: "2024-05-12", status: "Completed" },
+    { id: 3, type: "Refund", amount: -29.99, date: "2024-05-10", status: "Completed" },
+    { id: 4, type: "Subscription", amount: 49.99, date: "2024-05-08", status: "Pending" },
+  ];
+
+  const whatsnew = [
+    { title: "API Insights", desc: "Get deeper insights into your API usage patterns" },
+    { title: "Performance Improvements", desc: "20% faster dashboard loading times" },
+    { title: "Bug Fixes", desc: "Fixed critical issues with payment processing" },
+  ];
+
+  const recentApps = [
+    { id: 1, name: "Charge Management", icon: "💳" },
+    { id: 2, name: "Analytics", icon: "📈" },
+    { id: 3, name: "User Management", icon: "👥" },
+    { id: 4, name: "Reports", icon: "📄" },
+    { id: 5, name: "Settings", icon: "⚙️" },
+    { id: 6, name: "Support", icon: "🆘" },
+  ];
+
+  const activities = [
+    { id: 1, action: "Subscribed to Charge Management", time: "2 hours ago", status: "Success" },
+    { id: 2, action: "Updated API keys", time: "5 hours ago", status: "Success" },
+    { id: 3, action: "Attempted payment", time: "1 day ago", status: "Failed" },
+    { id: 4, action: "Completed KYC verification", time: "2 days ago", status: "Success" },
+  ];
+
+  const handleOpenApp = (appName) => {
+    alert(`Opening ${appName}...`);
   };
 
-  const raiseTicket = (e) => {
-    e.preventDefault();
-    if (!ticketSubject || !ticketDetails) {
-      window.alert("Please fill subject and details to raise a ticket.");
-      return;
-    }
-    setTicketSubmitted(true);
-    setTicketSubject("");
-    setTicketDetails("");
-    setTimeout(() => setTicketSubmitted(false), 2800);
+  const handleCompleteKYC = () => {
+    setShowKYCAlert(true);
+    setTimeout(() => setShowKYCAlert(false), 3000);
+  };
+
+  const handleChatSupport = () => {
+    alert("Chat support coming soon! For now, please contact support@boldandwise.com");
+  };
+
+  const handleRaiseTicket = () => {
+    alert("Redirecting to support ticket form...");
+  };
+
+  const maxUsage = Math.max(...usageData.map(d => d.usage));
+  
+  const getStatusColor = (status) => {
+    if (status === "Success") return "#10b981";
+    if (status === "Failed") return "#ef4444";
+    return "#f59e0b";
+  };
+
+  const getStatusDot = (status) => {
+    const colors = {
+      Success: "#10b981",
+      Failed: "#ef4444",
+      Pending: "#f59e0b",
+      Completed: "#10b981",
+    };
+    return colors[status] || "#64748b";
   };
 
   return (
-    <div style={{ width: "100%", minWidth: 320 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <style>{`
         @media (max-width: 768px) {
-          .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
-          .actions-grid { grid-template-columns: repeat(2, 1fr) !important; }
-          .main-grid { grid-template-columns: 1fr !important; }
-          .search-bar { width: 100% !important; }
+          .stats-grid { grid-template-columns: 1fr !important; }
+          .apps-grid { grid-template-columns: repeat(2, 1fr) !important; }
+          .actions-grid { grid-template-columns: 1fr !important; }
+          .whatsnew-grid { grid-template-columns: 1fr !important; }
         }
         @media (max-width: 480px) {
           .stats-grid { grid-template-columns: 1fr !important; }
-          .actions-grid { grid-template-columns: 1fr !important; }
-          h1 { font-size: 20px !important; }
-          .search-bar { width: 100% !important; }
+          .apps-grid { grid-template-columns: 1fr !important; }
+          .search-input { font-size: 14px !important; }
         }
       `}</style>
-      <div
-        style={{
+
+      {showKYCAlert && (
+        <div style={{
+          background: "#d1fae5",
+          border: "1px solid #6ee7b7",
+          borderRadius: 8,
+          padding: 12,
+          color: "#065f46",
+          fontSize: 14,
+        }}>
+          ✓ KYC document submitted successfully. Verification in progress...
+        </div>
+      )}
+
+      {/* Search Bar */}
+      <div style={{
+        display: "flex",
+        gap: 8,
+      }}>
+        <input
+          type="text"
+          placeholder="Search apps, subscriptions, tickets, invoices..."
+          className="search-input"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{
+            flex: 1,
+            padding: "10px 14px",
+            border: "1px solid #e2e8f0",
+            borderRadius: 8,
+            fontSize: 14,
+            color: "#0f172a",
+          }}
+        />
+        <button style={{
+          padding: "10px 16px",
+          backgroundColor: "#2563eb",
+          color: "#fff",
+          border: "none",
+          borderRadius: 8,
+          cursor: "pointer",
+          fontWeight: 600,
+        }}>
+          Search
+        </button>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="stats-grid" style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(3, 1fr)",
+        gap: 14,
+      }}>
+        {stats.map((stat, idx) => (
+          <div key={idx} style={{
+            background: "#fff",
+            border: "1px solid #e2e8f0",
+            borderRadius: 12,
+            padding: 16,
+            textAlign: "center",
+            boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+          }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>{stat.icon}</div>
+            <p style={{ fontSize: 28, fontWeight: 700, margin: "0 0 4px", color: "#0f172a" }}>
+              {stat.value}
+            </p>
+            <p style={{ fontSize: 13, color: "#64748b", margin: 0 }}>{stat.label}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="actions-grid" style={{
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gap: 14,
+      }}>
+        <button onClick={handleCompleteKYC} style={{
+          background: "#fff",
+          border: "2px solid #fbbf24",
+          borderRadius: 12,
+          padding: 16,
+          cursor: "pointer",
+          textAlign: "left",
+          transition: "all 0.3s ease",
+        }}
+        onMouseEnter={(e) => e.target.style.background = "#fffbeb"}
+        onMouseLeave={(e) => e.target.style.background = "#fff"}
+        >
+          <div style={{ fontSize: 24, marginBottom: 8 }}>📋</div>
+          <p style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 700 }}>Complete KYC</p>
+          <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>Verify your account to unlock all features</p>
+        </button>
+        <button onClick={() => navigate("/settings")} style={{
+          background: "#fff",
+          border: "2px solid #a5f3fc",
+          borderRadius: 12,
+          padding: 16,
+          cursor: "pointer",
+          textAlign: "left",
+          transition: "all 0.3s ease",
+        }}
+        onMouseEnter={(e) => e.target.style.background = "#ecf9ff"}
+        onMouseLeave={(e) => e.target.style.background = "#fff"}
+        >
+          <div style={{ fontSize: 24, marginBottom: 8 }}>⚙️</div>
+          <p style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 700 }}>Account Settings</p>
+          <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>Manage your account preferences</p>
+        </button>
+      </div>
+
+      {/* Usage Overview Chart */}
+      <div style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        padding: 16,
+        boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+      }}>
+        <h3 style={{ margin: "0 0 14px", color: "#0f172a", fontSize: 16, fontWeight: 700 }}>
+          Usage Overview 📊
+        </h3>
+        <div style={{
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 8,
+          height: 120,
+          paddingTop: 10,
+        }}>
+          {usageData.map((data, idx) => (
+            <div key={idx} style={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 4,
+            }}>
+              <div style={{
+                width: "100%",
+                height: (data.usage / maxUsage) * 100 + "px",
+                backgroundColor: "#2563eb",
+                borderRadius: "4px 4px 0 0",
+                opacity: 0.8,
+                transition: "all 0.3s ease",
+              }}
+              onMouseEnter={(e) => e.target.style.opacity = "1"}
+              onMouseLeave={(e) => e.target.style.opacity = "0.8"}
+              title={`${data.usage}%`}
+              />
+              <small style={{ fontSize: 11, color: "#64748b" }}>{data.date}</small>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Transaction History */}
+      <div style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        padding: 16,
+        boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+      }}>
+        <h3 style={{ margin: "0 0 14px", color: "#0f172a", fontSize: 16, fontWeight: 700 }}>
+          Transaction History 💰
+        </h3>
+        <div style={{ display: "grid", gap: 10 }}>
+          {transactions.map((tx) => (
+            <div key={tx.id} style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: 12,
+              backgroundColor: "#f8fafc",
+              borderRadius: 8,
+              borderLeft: `3px solid ${getStatusDot(tx.status)}`,
+            }}>
+              <div style={{ flex: 1 }}>
+                <p style={{ margin: 0, color: "#0f172a", fontWeight: 600, fontSize: 13 }}>
+                  {tx.type}
+                </p>
+                <small style={{ color: "#64748b", fontSize: 12 }}>{tx.date}</small>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <p style={{
+                  margin: 0,
+                  fontWeight: 700,
+                  color: tx.amount > 0 ? "#ef4444" : "#0f172a",
+                  fontSize: 14,
+                }}>
+                  {tx.amount > 0 ? "-" : "+"} ${Math.abs(tx.amount).toFixed(2)}
+                </p>
+                <small style={{
+                  color: getStatusColor(tx.status),
+                  fontSize: 11,
+                  fontWeight: 600,
+                }}>
+                  {tx.status}
+                </small>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* What's New */}
+      <div style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        padding: 16,
+        boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+      }}>
+        <div style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          background: "#fff",
-          borderRadius: 14,
-          border: "1px solid #e2e8f0",
-          padding: "16px 12px",
-          marginBottom: 16,
-          boxShadow: "0 4px 10px rgba(15,23,42,0.05)",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
-        <div style={{ width: "100%" }}>
-          <h1 style={{ margin: 0, fontSize: 30 }}>Good Morning, Rohan 👋</h1>
-          <p style={{ margin: "8px 0 0", color: "#475569" }}>
-            Here&apos;s a quick overview of your account.
-          </p>
+          marginBottom: 14,
+        }}>
+          <h3 style={{ margin: 0, color: "#0f172a", fontSize: 16, fontWeight: 700 }}>
+            What's New ✨
+          </h3>
+          <button style={{
+            background: "none",
+            border: "none",
+            color: "#2563eb",
+            cursor: "pointer",
+            fontSize: 13,
+            fontWeight: 600,
+          }}>
+            View All Updates →
+          </button>
         </div>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search apps..."
-          className="search-bar"
-          style={{
-            width: 280,
-            padding: "10px 14px",
-            border: "1px solid #cbd5e1",
-            borderRadius: 10,
-            outline: "none",
-          }}
-        />
-      </div>
-
-      <div
-        style={{
+        <div className="whatsnew-grid" style={{
           display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+          gridTemplateColumns: "repeat(3, 1fr)",
           gap: 12,
-          marginBottom: 16,
-        }}
-        className="stats-grid"
-      >
-        <StatCard title="Active Apps" value={`${summary.total} Apps`} />
-        <StatCard
-          title="Active Subscriptions"
-          value={`${summary.subscribed} Subscribed`}
-        />
-        <StatCard title="Average Usage" value={`${summary.avgUsage}%`} />
-        <StatCard title="Open Support Tickets" value="8" />
-      </div>
-
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-          gap: 12,
-          marginBottom: 16,
-        }}
-        className="actions-grid"
-      >
-        <ActionCard
-          title="Complete KYC"
-          description="Verify your identity for access"
-          buttonText="Start"
-        />
-        <ActionCard
-          title="Explore Apps"
-          description="Discover all available applications"
-          buttonText="Browse"
-        />
-        <ActionCard
-          title="Account Settings"
-          description="Manage your account preferences"
-          buttonText="Go to Settings"
-        />
-        <ActionCard
-          title="Contact Support"
-          description="Get assistance from our support team"
-          buttonText="Get Help"
-        />
-      </div>
-
-      <div
-        style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 14 }}
-        className="main-grid"
-      >
-        <div style={{ display: "grid", gap: 12 }}>
-          <CardContainer title="Recently Accessed Apps">
-            {filteredApps.slice(0, 3).map((app) => (
-              <AppRow
-                key={app.id}
-                app={app}
-                onAction={() =>
-                  app.status === "subscribed"
-                    ? window.alert(`${app.name} opened`)
-                    : toggleSubscription(app.id)
-                }
-              />
-            ))}
-            {filteredApps.length === 0 && (
-              <p style={{ color: "#64748b" }}>No apps found.</p>
-            )}
-          </CardContainer>
-
-          <CardContainer title="Activity Timeline">
-            <ul
-              style={{
-                padding: 0,
-                margin: 0,
-                listStyle: "none",
-                display: "grid",
-                gap: 10,
-              }}
-            >
-              {RECENT_ACTIVITY.map((item) => (
-                <li
-                  key={item.id}
-                  style={{
-                    borderBottom: "1px solid #e2e8f0",
-                    paddingBottom: 8,
-                  }}
-                >
-                  <p style={{ margin: 0, fontSize: 14, color: "#0f172a" }}>
-                    {item.title}
-                  </p>
-                  <small style={{ color: "#64748b" }}>{item.when}</small>
-                </li>
-              ))}
-            </ul>
-          </CardContainer>
+        }}>
+          {whatsnew.map((item, idx) => (
+            <div key={idx} style={{
+              padding: 12,
+              backgroundColor: "#f0f9ff",
+              borderRadius: 8,
+              border: "1px solid #bfdbfe",
+            }}>
+              <p style={{ margin: "0 0 4px", color: "#0f172a", fontWeight: 600, fontSize: 13 }}>
+                {item.title}
+              </p>
+              <p style={{ margin: 0, color: "#64748b", fontSize: 12 }}>{item.desc}</p>
+            </div>
+          ))}
         </div>
+      </div>
 
-        <aside style={{ display: "grid", gap: 12 }}>
-          <CardContainer title="Recent Activity">
-            <ul
-              style={{
-                margin: 0,
-                padding: 0,
-                listStyle: "none",
-                display: "grid",
-                gap: 10,
-              }}
-            >
-              {RECENT_ACTIVITY.slice(0, 2).map((item) => (
-                <li
-                  key={item.id}
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                  }}
-                >
-                  <span style={{ fontSize: 14, color: "#0f172a" }}>
-                    {item.title}
-                  </span>
-                  <small style={{ color: "#64748b" }}>{item.when}</small>
-                </li>
-              ))}
-            </ul>
-          </CardContainer>
-
-          <CardContainer title="Raise Ticket">
-            <form onSubmit={raiseTicket} style={{ display: "grid", gap: 10 }}>
-              <input
-                value={ticketSubject}
-                onChange={(e) => setTicketSubject(e.target.value)}
-                placeholder="Subject"
-                style={{
-                  padding: 8,
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 8,
-                  outline: "none",
-                }}
-              />
-              <textarea
-                value={ticketDetails}
-                onChange={(e) => setTicketDetails(e.target.value)}
-                placeholder="Describe your issue"
-                rows={4}
-                style={{
-                  padding: 8,
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 8,
-                  outline: "none",
-                }}
-              />
-              <button
-                type="submit"
-                style={{
-                  background: "#2563eb",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  padding: "8px 12px",
-                  cursor: "pointer",
-                }}
-              >
-                Raise Ticket
-              </button>
-              {ticketSubmitted && (
-                <span style={{ color: "#16a34a" }}>
-                  Ticket raised successfully!
-                </span>
-              )}
-            </form>
-          </CardContainer>
-
-          <CardContainer title="Help & Support">
-            <div style={{ display: "grid", gap: 8 }}>
-              <SupportItem title="Read Documentation" />
-              <SupportItem title="Billing & Payments FAQ" />
-              <SupportItem title="Contact Admin" />
-              <button
-                style={{
-                  marginTop: 8,
-                  background: "#2563eb",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: 8,
-                  padding: "8px 12px",
-                  cursor: "pointer",
-                }}
-                onClick={() => window.alert("Admin support request sent")}
-              >
-                Need Assistance?
+      {/* Recently Accessed Apps */}
+      <div style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        padding: 16,
+        boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+      }}>
+        <h3 style={{ margin: "0 0 14px", color: "#0f172a", fontSize: 16, fontWeight: 700 }}>
+          Recently Accessed Apps 🚀
+        </h3>
+        <div className="apps-grid" style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: 12,
+        }}>
+          {recentApps.map((app) => (
+            <div key={app.id} style={{
+              padding: 12,
+              backgroundColor: "#f8fafc",
+              borderRadius: 8,
+              border: "1px solid #e2e8f0",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}>
+              <div style={{ fontSize: 24 }}>{app.icon}</div>
+              <div style={{ flex: 1 }}>
+                <p style={{ margin: 0, color: "#0f172a", fontWeight: 600, fontSize: 13 }}>
+                  {app.name}
+                </p>
+              </div>
+              <button onClick={() => handleOpenApp(app.name)} style={{
+                background: "#2563eb",
+                color: "#fff",
+                border: "none",
+                borderRadius: 6,
+                padding: "5px 10px",
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
+              }}>
+                Open
               </button>
             </div>
-          </CardContainer>
-        </aside>
+          ))}
+        </div>
+      </div>
+
+      {/* Recent Activities */}
+      <div style={{
+        background: "#fff",
+        border: "1px solid #e2e8f0",
+        borderRadius: 12,
+        padding: 16,
+        boxShadow: "0 2px 8px rgba(15, 23, 42, 0.04)",
+      }}>
+        <h3 style={{ margin: "0 0 14px", color: "#0f172a", fontSize: 16, fontWeight: 700 }}>
+          Recent Activities 📝
+        </h3>
+        <div style={{ display: "grid", gap: 10 }}>
+          {activities.map((activity) => (
+            <div key={activity.id} style={{
+              display: "flex",
+              gap: 10,
+              padding: 10,
+              borderLeft: `3px solid ${getStatusDot(activity.status)}`,
+              paddingLeft: 12,
+            }}>
+              <div style={{
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                backgroundColor: getStatusDot(activity.status),
+                marginTop: 5,
+                flexShrink: 0,
+              }} />
+              <div style={{ flex: 1 }}>
+                <p style={{ margin: 0, color: "#0f172a", fontSize: 13, fontWeight: 500 }}>
+                  {activity.action}
+                </p>
+                <small style={{ color: "#64748b", fontSize: 12 }}>{activity.time}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Support Section */}
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "1fr 1fr",
+        gap: 14,
+      }}>
+        <div style={{
+          background: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+          borderRadius: 12,
+          padding: 20,
+          color: "#fff",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+          minHeight: 140,
+        }}>
+          <div>
+            <h3 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700 }}>
+              💬 Live Chat Support
+            </h3>
+            <p style={{ margin: 0, fontSize: 13, opacity: 0.9 }}>
+              Get instant help from our support team
+            </p>
+          </div>
+          <button onClick={handleChatSupport} style={{
+            alignSelf: "flex-start",
+            background: "#fff",
+            color: "#667eea",
+            border: "none",
+            borderRadius: 6,
+            padding: "8px 14px",
+            fontWeight: 600,
+            cursor: "pointer",
+            fontSize: 12,
+          }}>
+            Start Chat
+          </button>
+        </div>
+        <div style={{
+          background: "linear-gradient(135deg, #f093fb 0%, #f5576c 100%)",
+          borderRadius: 12,
+          padding: 20,
+          color: "#fff",
+          display: "flex",
+          flexDirection: "column",
+          justifyContent: "space-between",
+          minHeight: 140,
+        }}>
+          <div>
+            <h3 style={{ margin: "0 0 8px", fontSize: 16, fontWeight: 700 }}>
+              🎫 Support Tickets
+            </h3>
+            <p style={{ margin: 0, fontSize: 13, opacity: 0.9 }}>
+              Raise a ticket for detailed support
+            </p>
+          </div>
+          <button onClick={handleRaiseTicket} style={{
+            alignSelf: "flex-start",
+            background: "#fff",
+            color: "#f5576c",
+            border: "none",
+            borderRadius: 6,
+            padding: "8px 14px",
+            fontWeight: 600,
+            cursor: "pointer",
+            fontSize: 12,
+          }}>
+            Raise Ticket
+          </button>
+        </div>
       </div>
     </div>
-  );
-}
-
-function StatCard({ title, value }) {
-  return (
-    <div
-      style={{
-        background: "#fff",
-        borderRadius: 14,
-        padding: 16,
-        border: "1px solid #e2e8f0",
-        boxShadow: "0 4px 10px rgba(15,23,42,0.04)",
-      }}
-    >
-      <p style={{ margin: 0, color: "#0f172a", fontWeight: 700, fontSize: 13 }}>
-        {title}
-      </p>
-      <p style={{ margin: "8px 0 0", fontSize: 24, fontWeight: 700 }}>
-        {value}
-      </p>
-    </div>
-  );
-}
-
-function ActionCard({ title, description, buttonText }) {
-  return (
-    <div
-      style={{
-        background: "#fff",
-        borderRadius: 14,
-        padding: 16,
-        border: "1px solid #e2e8f0",
-        boxShadow: "0 4px 10px rgba(15,23,42,0.04)",
-      }}
-    >
-      <p style={{ margin: 0, color: "#0f172a", fontWeight: 700, fontSize: 13 }}>
-        {title}
-      </p>
-      <p style={{ margin: "8px 0 0", color: "#64748b", fontSize: 13 }}>
-        {description}
-      </p>
-      <button
-        style={{
-          marginTop: 10,
-          background: "#2563eb",
-          color: "#fff",
-          border: "none",
-          borderRadius: 8,
-          padding: "8px 12px",
-          cursor: "pointer",
-        }}
-      >
-        {buttonText}
-      </button>
-    </div>
-  );
-}
-
-function CardContainer({ title, children }) {
-  return (
-    <div
-      style={{
-        background: "#fff",
-        borderRadius: 14,
-        border: "1px solid #e2e8f0",
-        padding: 14,
-        boxShadow: "0 4px 10px rgba(15,23,42,0.04)",
-      }}
-    >
-      <h2 style={{ margin: 0, marginBottom: 10, fontSize: 16 }}>{title}</h2>
-      {children}
-    </div>
-  );
-}
-
-function AppRow({ app, onAction }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        gap: 6,
-        borderTop: "1px solid #e2e8f0",
-        paddingTop: 8,
-      }}
-    >
-      <div>
-        <p style={{ margin: 0, fontWeight: 600 }}>{app.name}</p>
-        <p style={{ margin: "3px 0 0", color: "#64748b", fontSize: 13 }}>
-          {app.description}
-        </p>
-      </div>
-      <button
-        onClick={onAction}
-        style={{
-          border: "none",
-          background: "#2563eb",
-          color: "#fff",
-          padding: "6px 10px",
-          borderRadius: 8,
-          cursor: "pointer",
-        }}
-      >
-        {app.status === "subscribed" ? "Open" : "Subscribe"}
-      </button>
-    </div>
-  );
-}
-
-function SupportItem({ title }) {
-  return (
-    <button
-      style={{
-        display: "block",
-        width: "100%",
-        textAlign: "left",
-        padding: "8px 10px",
-        border: "1px solid #e2e8f0",
-        borderRadius: 8,
-        background: "#f8fafc",
-        color: "#0f172a",
-        cursor: "pointer",
-      }}
-      onClick={() => window.alert(title)}
-    >
-      {title}
-    </button>
   );
 }

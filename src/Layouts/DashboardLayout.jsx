@@ -305,12 +305,9 @@ export default function DashboardLayout() {
       <main
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 320px",
+          gridTemplateColumns: "1fr",
           gap: 18,
           padding: "18px 16px",
-          "@media (max-width: 1024px)": {
-            gridTemplateColumns: "1fr",
-          },
         }}
       >
         <section
@@ -326,118 +323,8 @@ export default function DashboardLayout() {
           </div>
         </section>
 
-        <aside
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: 14,
-            "@media (max-width: 1024px)": {
-              display: "none",
-            },
-          }}
-        >
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 14,
-              border: "1px solid #e2e8f0",
-              padding: 14,
-              boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
-            }}
-          >
-            <p style={{ margin: 0, color: "#0f172a", fontWeight: 700 }}>
-              Subscription Status
-            </p>
-            <p style={{ margin: "8px 0 2px", fontSize: 13, color: "#64748b" }}>
-              Premium Plan � Active
-            </p>
-            <p style={{ margin: 0, color: "#0f172a", fontSize: 12 }}>
-              Next billing date: May 25, 2024
-            </p>
-            <button
-              style={{
-                marginTop: 10,
-                width: "100%",
-                backgroundColor: "#2563eb",
-                border: "none",
-                borderRadius: 8,
-                color: "#fff",
-                padding: "8px 10px",
-                cursor: "pointer",
-              }}
-            >
-              Manage Plan
-            </button>
-          </div>
-
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 14,
-              border: "1px solid #e2e8f0",
-              padding: 14,
-              boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
-            }}
-          >
-            <p style={{ margin: 0, color: "#0f172a", fontWeight: 700 }}>
-              Recent Activities
-            </p>
-            <ul
-              style={{
-                listStyle: "none",
-                padding: 0,
-                margin: "10px 0 0",
-                display: "grid",
-                gap: 8,
-              }}
-            >
-              <li style={{ fontSize: 13, color: "#334155" }}>
-                Subscribed to Charge Management <br />
-                <small style={{ color: "#64748b" }}>2 hours ago</small>
-              </li>
-              <li style={{ fontSize: 13, color: "#334155" }}>
-                Completed a Task <br />
-                <small style={{ color: "#64748b" }}>yesterday</small>
-              </li>
-              <li style={{ fontSize: 13, color: "#334155" }}>
-                Subscribed to Application Management <br />
-                <small style={{ color: "#64748b" }}>2 days ago</small>
-              </li>
-            </ul>
-          </div>
-
-          <div
-            style={{
-              background: "#fff",
-              borderRadius: 14,
-              border: "1px solid #e2e8f0",
-              padding: 14,
-              boxShadow: "0 4px 14px rgba(15, 23, 42, 0.06)",
-            }}
-          >
-            <p style={{ margin: 0, color: "#0f172a", fontWeight: 700 }}>
-              Support & Resources
-            </p>
-            <ul
-              style={{
-                listStyle: "none",
-                padding: 0,
-                margin: "10px 0 0",
-                display: "grid",
-                gap: 6,
-              }}
-            >
-              <li style={{ fontSize: 13, color: "#0f172a" }}>Contact Admin</li>
-              <li style={{ fontSize: 13, color: "#0f172a" }}>
-                Billing & Payments FAQ
-              </li>
-              <li style={{ fontSize: 13, color: "#0f172a" }}>
-                KYC Verification Guide
-              </li>
-            </ul>
-          </div>
-        </aside>
       </main>
     </div>
   );
 }
+
