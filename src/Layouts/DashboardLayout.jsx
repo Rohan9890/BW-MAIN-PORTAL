@@ -322,9 +322,7 @@ export default function DashboardLayout() {
             <Outlet />
           </div>
         </section>
-
       </main>
     </div>
   );
 }
-
