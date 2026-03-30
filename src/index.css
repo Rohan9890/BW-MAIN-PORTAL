@@ -23,15 +23,61 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-image: url('/bg-gradient.png');
+  background-image: url("/bg-gradient.png");
   background-size: cover;
   background-attachment: fixed;
   background-position: center;
   background-repeat: no-repeat;
   min-height: 100vh;
+}
+
+html[data-theme="dark"] body {
+  background-image:
+    radial-gradient(circle at 15% 20%, #1e293b 0%, transparent 45%),
+    radial-gradient(circle at 80% 10%, #1d4ed8 0%, transparent 35%),
+    linear-gradient(160deg, #0b1220 0%, #0f172a 45%, #111827 100%);
+  color: #e5e7eb;
+}
+
+html[data-theme="dark"] .card-container {
+  background: #111827;
+  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.5);
+}
+
+html[data-theme="dark"] .input {
+  background: #0f172a;
+  border-color: #334155;
+  color: #e2e8f0;
+}
+
+html[data-theme="dark"] .input:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
+}
+
+html[data-theme="dark"] .home-card,
+html[data-theme="dark"] .stat-card,
+html[data-theme="dark"] .settings-card {
+  background: linear-gradient(145deg, #0f172a 0%, #111827 100%) !important;
+  border-color: rgba(96, 165, 250, 0.24) !important;
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.55) !important;
+}
+
+html[data-theme="dark"] .search-input {
+  background: #0f172a !important;
+  border-color: #334155 !important;
+  color: #e2e8f0 !important;
+}
+
+html[data-theme="dark"] .open-btn {
+  background: #1e293b !important;
+  color: #bfdbfe !important;
+  border-color: #334155 !important;
 }
 
 #root {

@@ -1,101 +1,49 @@
 import { useState, useEffect } from "react";
+import { appsApi } from "../services";
 
 const STORAGE_KEY = "bold-wise-allapps";
 
-const initData = [
-  {
-    id: 1,
-    name: "Document Management",
-    description: "Manage and organize all your documents efficiently.",
-    detail:
-      "A full-suite document workspace with version control, comments, and workflows.",
-    category: "Productivity",
-    status: "active",
-    subscribed: true,
-    wishlisted: false,
-  },
-  {
-    id: 2,
-    name: "Application Management",
-    description: "Monitor, deploy, and manage business applications.",
-    detail:
-      "Track app health, enforce policies, and get analytics across all environments.",
-    category: "DevOps",
-    status: "active",
-    subscribed: true,
-    wishlisted: true,
-  },
-  {
-    id: 3,
-    name: "Charge Management",
-    description: "Billing and payment processing for apps and services.",
-    detail:
-      "Declarative invoice generation, audit logs, and smart cost predictions.",
-    category: "Finance",
-    status: "available",
-    subscribed: false,
-    wishlisted: false,
-  },
-  {
-    id: 4,
-    name: "Overview Purchasing",
-    description: "Procurement dashboard for orders and approvals.",
-    detail:
-      "Run purchase cycles, supplier ratings, and spending limits + reports.",
-    category: "Finance",
-    status: "available",
-    subscribed: false,
-    wishlisted: true,
-  },
-  {
-    id: 5,
-    name: "Software Constraints",
-    description: "Govern constraints, compliance and policy enforcement.",
-    detail:
-      "Set rules for permissions, license checks, and secure usage across the company.",
-    category: "Security",
-    status: "available",
-    subscribed: false,
-    wishlisted: false,
-  },
-  {
-    id: 6,
-    name: "User Analytics",
-    description: "Data insights on user behavior and resource usage.",
-    detail: "Drill into adoption metrics, funnel analytics, and health scores.",
-    category: "Analytics",
-    status: "beta",
-    subscribed: false,
-    wishlisted: false,
-  },
-];
-
 export default function AllApps() {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
   const [apps, setApps] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length) {
-          setApps(parsed);
-          setSelectedId(parsed[0].id);
-          setLoading(false);
-          return;
+    const loadApps = async () => {
+      setLoading(true);
+      setError("");
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length) {
+            setApps(parsed);
+            setSelectedId(parsed[0].id);
+            setLoading(false);
+            return;
+          }
+        } catch (error) {
+          console.warn("Failed parsing saved apps", error);
         }
-      } catch (error) {
-        console.warn("Failed parsing saved apps", error);
       }
-    }
 
-    setTimeout(() => {
-      setApps(initData);
-      setSelectedId(initData[0].id);
-      setLoading(false);
-    }, 600);
+      try {
+        const list = await appsApi.getAllApps();
+        const normalized = Array.isArray(list) ? list : [];
+        setApps(normalized);
+        setSelectedId(normalized[0]?.id || null);
+      } catch (serviceError) {
+        setError(serviceError?.message || "Unable to load applications.");
+        setApps([]);
+        setSelectedId(null);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadApps();
   }, []);
 
   useEffect(() => {
@@ -104,20 +52,47 @@ export default function AllApps() {
     }
   }, [apps, loading]);
 
-  const selectedApp = apps.find((app) => app.id === selectedId) || null;
+  const filteredApps = apps.filter((app) =>
+    `${app.name} ${app.category} ${app.description}`
+      .toLowerCase()
+      .includes(search.trim().toLowerCase()),
+  );
+  const selectedApp = filteredApps.find((app) => app.id === selectedId) || null;
 
-  const toggleSubscribe = (id) => {
+  useEffect(() => {
+    if (!filteredApps.length) {
+      setSelectedId(null);
+      return;
+    }
+
+    const exists = filteredApps.some((item) => item.id === selectedId);
+    if (!exists) {
+      setSelectedId(filteredApps[0].id);
+    }
+  }, [filteredApps, selectedId]);
+
+  const toggleSubscribe = async (id) => {
+    const target = apps.find((app) => app.id === id);
+    if (!target) return;
+
+    const nextValue = !target.subscribed;
+    await appsApi.toggleSubscription(id, nextValue);
     setApps((prev) =>
       prev.map((app) =>
-        app.id === id ? { ...app, subscribed: !app.subscribed } : app,
+        app.id === id ? { ...app, subscribed: nextValue } : app,
       ),
     );
   };
 
-  const toggleWishlist = (id) => {
+  const toggleWishlist = async (id) => {
+    const target = apps.find((app) => app.id === id);
+    if (!target) return;
+
+    const nextValue = !target.wishlisted;
+    await appsApi.toggleFavorite(id, nextValue);
     setApps((prev) =>
       prev.map((app) =>
-        app.id === id ? { ...app, wishlisted: !app.wishlisted } : app,
+        app.id === id ? { ...app, wishlisted: nextValue } : app,
       ),
     );
   };
@@ -143,6 +118,14 @@ export default function AllApps() {
             100% { transform: rotate(360deg); }
           }
         `}</style>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ textAlign: "center", padding: "50px", color: "#b91c1c" }}>
+        {error}
       </div>
     );
   }
@@ -186,16 +169,8 @@ export default function AllApps() {
           <input
             type="text"
             placeholder="Search apps..."
-            onChange={(e) => {
-              const value = e.target.value.toLowerCase();
-              const firstMatch = apps.find(
-                (a) =>
-                  a.name.toLowerCase().includes(value) ||
-                  a.category.toLowerCase().includes(value) ||
-                  a.description.toLowerCase().includes(value),
-              );
-              if (firstMatch) setSelectedId(firstMatch.id);
-            }}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
             style={{
               borderRadius: 8,
               border: "1px solid #dbe2ed",
@@ -206,7 +181,7 @@ export default function AllApps() {
         </div>
 
         <div style={{ display: "grid", gap: 10 }}>
-          {apps.map((app) => (
+          {filteredApps.map((app) => (
             <div
               key={app.id}
               onClick={() => setSelectedId(app.id)}
@@ -277,6 +252,11 @@ export default function AllApps() {
               </button>
             </div>
           ))}
+          {!filteredApps.length && (
+            <div style={{ color: "#64748b", padding: 8 }}>
+              No applications found.
+            </div>
+          )}
         </div>
       </section>
 

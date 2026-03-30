@@ -16,8 +16,6 @@ export default function Header() {
       navigate("/profile");
     } else if (option === "Settings") {
       navigate("/settings");
-    } else if (option === "Billing / Subscription") {
-      navigate("/billing");
     } else if (option === "Logout") {
       alert("Logged out");
       // navigate("/login"); // if you add login route later
@@ -46,11 +44,6 @@ export default function Header() {
                 </button>
                 <button onClick={() => handleOptionClick("Settings")}>
                   Settings
-                </button>
-                <button
-                  onClick={() => handleOptionClick("Billing / Subscription")}
-                >
-                  Billing / Subscription
                 </button>
                 <button onClick={() => handleOptionClick("Logout")}>
                   Logout

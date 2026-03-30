@@ -1,19 +1,20 @@
-import { Link } from 'react-router-dom';
-import './Logo.css';
+import { Link } from "react-router-dom";
+import "./Logo.css";
+import { useBrand } from "../context/BrandContext";
 
-const LOGO_IMAGE = '/logo.png';
+function LogoContent({ className = "", compact = false, showText = false }) {
+  const { brand, defaultBrand } = useBrand();
 
-function LogoContent({ className = '', compact = false }) {
   return (
-    <span className={`logo-brand ${compact ? 'logo-compact' : ''} ${className}`.trim()}>
+    <span
+      className={`logo-brand ${compact ? "logo-compact" : ""} ${className}`.trim()}
+    >
       <img
-        src={LOGO_IMAGE}
-        alt="Logo"
+        src={brand.logoUrl || defaultBrand.logoUrl}
+        alt={brand.name}
         className="logo-img"
         onError={(e) => {
-          e.target.style.display = 'none';
-          const next = e.target.nextElementSibling;
-          if (next) next.classList.add('logo-fallback-visible');
+          e.target.src = defaultBrand.logoUrl;
         }}
       />
       <span className="logo-fallback">
@@ -42,16 +43,24 @@ function LogoContent({ className = '', compact = false }) {
           />
         </svg>
       </span>
+      {showText && <span className="logo-tagline">{brand.name}</span>}
     </span>
   );
 }
 
-export default function Logo({ className = '', to = '/', compact = false }) {
-  const content = <LogoContent className={className} compact={compact} />;
+export default function Logo({
+  className = "",
+  to = "/",
+  compact = false,
+  showText = false,
+}) {
+  const content = (
+    <LogoContent className={className} compact={compact} showText={showText} />
+  );
 
   if (to) {
     return (
-      <Link to={to} className="logo-link" style={{ display: 'inline-flex' }}>
+      <Link to={to} className="logo-link" style={{ display: "inline-flex" }}>
         {content}
       </Link>
     );

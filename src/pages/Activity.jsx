@@ -1,60 +1,40 @@
-import { useState } from "react";
-
-const ACTIVITIES = [
-  {
-    id: 1,
-    type: "subscription",
-    title: "Subscribed to Document Management",
-    description: "You successfully subscribed to Document Management app.",
-    timestamp: "2026-03-26T10:30:00Z",
-    status: "success",
-  },
-  {
-    id: 2,
-    type: "login",
-    title: "Logged in",
-    description: "Successful login from Chrome on Windows.",
-    timestamp: "2026-03-26T09:15:00Z",
-    status: "info",
-  },
-  {
-    id: 3,
-    type: "payment",
-    title: "Payment processed",
-    description: "Monthly subscription payment of $29.99 was processed.",
-    timestamp: "2026-03-25T14:20:00Z",
-    status: "success",
-  },
-  {
-    id: 4,
-    type: "update",
-    title: "Profile updated",
-    description: "Your profile information has been updated.",
-    timestamp: "2026-03-25T11:45:00Z",
-    status: "info",
-  },
-  {
-    id: 5,
-    type: "error",
-    title: "Failed login attempt",
-    description: "Unsuccessful login attempt from unknown device.",
-    timestamp: "2026-03-24T16:10:00Z",
-    status: "error",
-  },
-  {
-    id: 6,
-    type: "subscription",
-    title: "Unsubscribed from Charge Management",
-    description: "You unsubscribed from Charge Management app.",
-    timestamp: "2026-03-24T13:05:00Z",
-    status: "warning",
-  },
-];
+import { useEffect, useState } from "react";
+import { activityApi } from "../services";
 
 export default function Activity() {
   const [filter, setFilter] = useState("all");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [activities, setActivities] = useState([]);
 
-  const filteredActivities = ACTIVITIES.filter((activity) => {
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadActivity = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const list = await activityApi.getActivity();
+        if (!isMounted) return;
+        setActivities(Array.isArray(list) ? list : []);
+      } catch (serviceError) {
+        if (!isMounted) return;
+        setError(serviceError?.message || "Unable to load activity.");
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadActivity();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const filteredActivities = activities.filter((activity) => {
     if (filter === "all") return true;
     return activity.type === filter;
   });
@@ -87,6 +67,22 @@ export default function Activity() {
     if (diffDays < 7) return `${diffDays} days ago`;
     return date.toLocaleDateString();
   };
+
+  if (loading) {
+    return (
+      <div style={{ padding: 24, textAlign: "center", color: "#64748b" }}>
+        Loading activity...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 24, textAlign: "center", color: "#b91c1c" }}>
+        {error}
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
@@ -220,7 +216,7 @@ export default function Activity() {
             }}
           >
             <div style={{ fontSize: 24, fontWeight: 700, color: "#2563eb" }}>
-              {ACTIVITIES.filter((a) => a.type === "subscription").length}
+              {activities.filter((a) => a.type === "subscription").length}
             </div>
             <div style={{ color: "#64748b", fontSize: 14 }}>Subscriptions</div>
           </div>
@@ -233,7 +229,7 @@ export default function Activity() {
             }}
           >
             <div style={{ fontSize: 24, fontWeight: 700, color: "#16a34a" }}>
-              {ACTIVITIES.filter((a) => a.status === "success").length}
+              {activities.filter((a) => a.status === "success").length}
             </div>
             <div style={{ color: "#64748b", fontSize: 14 }}>
               Successful Actions
@@ -248,7 +244,7 @@ export default function Activity() {
             }}
           >
             <div style={{ fontSize: 24, fontWeight: 700, color: "#dc2626" }}>
-              {ACTIVITIES.filter((a) => a.status === "error").length}
+              {activities.filter((a) => a.status === "error").length}
             </div>
             <div style={{ color: "#64748b", fontSize: 14 }}>Errors</div>
           </div>
@@ -261,7 +257,7 @@ export default function Activity() {
             }}
           >
             <div style={{ fontSize: 24, fontWeight: 700, color: "#d97706" }}>
-              {ACTIVITIES.filter((a) => a.type === "login").length}
+              {activities.filter((a) => a.type === "login").length}
             </div>
             <div style={{ color: "#64748b", fontSize: 14 }}>Login Events</div>
           </div>

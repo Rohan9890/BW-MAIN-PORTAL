@@ -1,39 +1,47 @@
 import { useState, useEffect } from "react";
+import { appsApi } from "../services";
 
 export default function Favorites() {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("All");
   const [favorites, setFavorites] = useState([]);
 
   useEffect(() => {
     const loadFavorites = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 600));
-
-      const favoriteApps = [
-        {
-          id: 1,
-          name: "Document Management",
-          description: "Manage and organize all your documents efficiently",
-          category: "Productivity",
-          favoritedDate: "2024-03-20",
-          rating: 5,
-        },
-        {
-          id: 2,
-          name: "User Analytics",
-          description: "Analyze user behavior and engagement",
-          category: "Analytics",
-          favoritedDate: "2024-03-18",
-          rating: 4,
-        },
-      ];
-
-      setFavorites(favoriteApps);
-      setLoading(false);
+      setError("");
+      try {
+        const favoriteApps = await appsApi.getFavorites();
+        setFavorites(Array.isArray(favoriteApps) ? favoriteApps : []);
+      } catch (serviceError) {
+        setError(serviceError?.message || "Unable to load favorites.");
+      } finally {
+        setLoading(false);
+      }
     };
 
     loadFavorites();
   }, []);
+
+  const categories = [
+    "All",
+    ...new Set(favorites.map((app) => app.category).filter(Boolean)),
+  ];
+
+  const filteredFavorites = favorites.filter((app) => {
+    const matchesSearch = `${app.name} ${app.description}`
+      .toLowerCase()
+      .includes(search.trim().toLowerCase());
+    const matchesCategory = category === "All" || app.category === category;
+    return matchesSearch && matchesCategory;
+  });
+
+  const handleRemoveFavorite = async (appId) => {
+    await appsApi.toggleFavorite(appId, false);
+    setFavorites((prev) => prev.filter((item) => item.id !== appId));
+  };
 
   if (loading) {
     return (
@@ -60,6 +68,14 @@ export default function Favorites() {
     );
   }
 
+  if (error) {
+    return (
+      <div style={{ textAlign: "center", padding: "50px", color: "#b91c1c" }}>
+        {error}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={{ marginBottom: "30px" }}>
@@ -71,9 +87,40 @@ export default function Favorites() {
         <p style={{ color: "#666", fontSize: "16px" }}>
           Your most loved and frequently used applications
         </p>
+        <div
+          style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}
+        >
+          <input
+            type="text"
+            placeholder="Search favorites..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: 8,
+              padding: "8px 12px",
+              minWidth: 220,
+            }}
+          />
+          <select
+            value={category}
+            onChange={(event) => setCategory(event.target.value)}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: 8,
+              padding: "8px 12px",
+            }}
+          >
+            {categories.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      {favorites.length === 0 ? (
+      {filteredFavorites.length === 0 ? (
         <div
           style={{
             textAlign: "center",
@@ -87,9 +134,7 @@ export default function Favorites() {
           <h3 style={{ color: "#6b7280", marginBottom: "10px" }}>
             No favorites yet
           </h3>
-          <p style={{ color: "#9ca3af" }}>
-            Mark applications as favorites to see them here
-          </p>
+          <p style={{ color: "#9ca3af" }}>No matching favorites found.</p>
         </div>
       ) : (
         <div
@@ -99,7 +144,7 @@ export default function Favorites() {
             gap: "20px",
           }}
         >
-          {favorites.map((app) => (
+          {filteredFavorites.map((app) => (
             <div
               key={app.id}
               style={{
@@ -229,6 +274,7 @@ export default function Favorites() {
                   Open App
                 </button>
                 <button
+                  onClick={() => handleRemoveFavorite(app.id)}
                   style={{
                     padding: "8px 16px",
                     backgroundColor: "#fef2f2",

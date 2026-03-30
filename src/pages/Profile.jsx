@@ -1,24 +1,66 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { profileApi } from "../services";
 
 export default function Profile() {
   const [isEditing, setIsEditing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [profile, setProfile] = useState({
-    fullName: "Rohan Kumar",
-    email: "rohan@example.com",
-    phone: "+91 9876543210",
-    role: "User",
-    photo: null, // URL or base64
+    fullName: "",
+    email: "",
+    phone: "",
+    role: "",
+    photo: null,
   });
-  const [kycStatus] = useState("Pending"); // Can be "Verified", "Pending", "Rejected"
+  const [kycStatus, setKycStatus] = useState("Pending");
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadProfile = async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const data = await profileApi.getMyProfile();
+        if (!isMounted || !data) return;
+
+        setProfile((prev) => ({
+          ...prev,
+          ...data,
+        }));
+
+        if (data.kycStatus) {
+          setKycStatus(data.kycStatus);
+        }
+      } catch (serviceError) {
+        if (!isMounted) return;
+        setError(serviceError?.message || "Unable to load profile.");
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadProfile();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleEdit = () => {
     setIsEditing(!isEditing);
   };
 
-  const handleSave = () => {
-    // Here you would save to backend
-    alert("Profile updated successfully!");
-    setIsEditing(false);
+  const handleSave = async () => {
+    try {
+      await profileApi.updateMyProfile(profile);
+      alert("Profile updated successfully!");
+      setIsEditing(false);
+    } catch (serviceError) {
+      alert(serviceError?.message || "Unable to update profile.");
+    }
   };
 
   const handleChange = (field, value) => {
@@ -30,11 +72,29 @@ export default function Profile() {
     if (file) {
       const reader = new FileReader();
       reader.onload = (e) => {
-        setProfile({ ...profile, photo: e.target.result });
+        const result = e.target.result;
+        setProfile({ ...profile, photo: result });
+        profileApi.uploadProfilePhoto(result);
       };
       reader.readAsDataURL(file);
     }
   };
+
+  if (loading) {
+    return (
+      <div style={{ padding: 24, textAlign: "center", color: "#64748b" }}>
+        Loading profile...
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div style={{ padding: 24, textAlign: "center", color: "#b91c1c" }}>
+        {error}
+      </div>
+    );
+  }
 
   const handleRemovePhoto = () => {
     setProfile({ ...profile, photo: null });

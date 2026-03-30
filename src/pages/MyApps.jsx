@@ -1,47 +1,47 @@
 import { useState, useEffect } from "react";
+import { appsApi } from "../services";
 
 export default function MyApps() {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("All");
   const [myApps, setMyApps] = useState([]);
 
   useEffect(() => {
     const loadMyApps = async () => {
       setLoading(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      const subscribedApps = [
-        {
-          id: 1,
-          name: "Document Management",
-          description: "Manage and organize all your documents efficiently",
-          category: "Productivity",
-          lastUsed: "2 hours ago",
-          usage: "85%",
-        },
-        {
-          id: 2,
-          name: "Application Management",
-          description: "Monitor and control application deployments",
-          category: "DevOps",
-          lastUsed: "1 day ago",
-          usage: "62%",
-        },
-        {
-          id: 3,
-          name: "Charge Management",
-          description: "Handle billing and payment processing",
-          category: "Finance",
-          lastUsed: "3 days ago",
-          usage: "41%",
-        },
-      ];
-
-      setMyApps(subscribedApps);
-      setLoading(false);
+      setError("");
+      try {
+        const subscribedApps = await appsApi.getMyApps();
+        setMyApps(Array.isArray(subscribedApps) ? subscribedApps : []);
+      } catch (serviceError) {
+        setError(serviceError?.message || "Unable to load your apps.");
+      } finally {
+        setLoading(false);
+      }
     };
 
     loadMyApps();
   }, []);
+
+  const categories = [
+    "All",
+    ...new Set(myApps.map((app) => app.category).filter(Boolean)),
+  ];
+
+  const filteredApps = myApps.filter((app) => {
+    const matchesSearch = `${app.name} ${app.description}`
+      .toLowerCase()
+      .includes(search.trim().toLowerCase());
+    const matchesCategory = category === "All" || app.category === category;
+    return matchesSearch && matchesCategory;
+  });
+
+  const handleUnsubscribe = async (appId) => {
+    await appsApi.toggleSubscription(appId, false);
+    setMyApps((prev) => prev.filter((item) => item.id !== appId));
+  };
 
   if (loading) {
     return (
@@ -68,6 +68,14 @@ export default function MyApps() {
     );
   }
 
+  if (error) {
+    return (
+      <div style={{ textAlign: "center", padding: "50px", color: "#b91c1c" }}>
+        {error}
+      </div>
+    );
+  }
+
   return (
     <div>
       <div style={{ marginBottom: "30px" }}>
@@ -79,9 +87,40 @@ export default function MyApps() {
         <p style={{ color: "#666", fontSize: "16px" }}>
           Manage your subscribed applications and track usage
         </p>
+        <div
+          style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}
+        >
+          <input
+            type="text"
+            placeholder="Search my apps..."
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: 8,
+              padding: "8px 12px",
+              minWidth: 220,
+            }}
+          />
+          <select
+            value={category}
+            onChange={(event) => setCategory(event.target.value)}
+            style={{
+              border: "1px solid #d1d5db",
+              borderRadius: 8,
+              padding: "8px 12px",
+            }}
+          >
+            {categories.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      {myApps.length === 0 ? (
+      {filteredApps.length === 0 ? (
         <div
           style={{
             textAlign: "center",
@@ -95,7 +134,7 @@ export default function MyApps() {
             No applications yet
           </h3>
           <p style={{ color: "#9ca3af" }}>
-            Visit the All Apps page to subscribe to applications
+            No matching apps found. Try another filter.
           </p>
         </div>
       ) : (
@@ -106,7 +145,7 @@ export default function MyApps() {
             gap: "20px",
           }}
         >
-          {myApps.map((app) => (
+          {filteredApps.map((app) => (
             <div
               key={app.id}
               style={{
@@ -243,24 +282,25 @@ export default function MyApps() {
                   Open App
                 </button>
                 <button
+                  onClick={() => handleUnsubscribe(app.id)}
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "#f3f4f6",
-                    color: "#374151",
-                    border: "1px solid #d1d5db",
+                    backgroundColor: "#fef2f2",
+                    color: "#b91c1c",
+                    border: "1px solid #fecaca",
                     borderRadius: "6px",
                     fontSize: "14px",
                     cursor: "pointer",
                     transition: "background-color 0.2s",
                   }}
                   onMouseEnter={(e) =>
-                    (e.currentTarget.style.backgroundColor = "#e5e7eb")
+                    (e.currentTarget.style.backgroundColor = "#fee2e2")
                   }
                   onMouseLeave={(e) =>
-                    (e.currentTarget.style.backgroundColor = "#f3f4f6")
+                    (e.currentTarget.style.backgroundColor = "#fef2f2")
                   }
                 >
-                  Settings
+                  Unsubscribe
                 </button>
               </div>
             </div>
