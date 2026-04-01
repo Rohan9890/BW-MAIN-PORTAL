@@ -1,6 +1,8 @@
 export const endpoints = {
   auth: {
-    login: "/auth/login",
+    login: "/api/v1.0/login",
+    verifyOtp: "/api/v1.0/login/verify-otp",
+    register: "/api/v1.0/register",
     registerIndividual: "/auth/register/individual",
     registerOrganization: "/auth/register/organization",
   },
@@ -15,6 +17,8 @@ export const endpoints = {
     apps: "/admin/apps",
     appById: (id) => `/admin/apps/${id}`,
     payments: "/admin/payments",
+    kyc: "/admin/kyc",
+    kycStatus: (id) => `/admin/kyc/${id}/status`,
     tickets: "/admin/tickets",
     ticketStatus: (id) => `/admin/tickets/${id}/status`,
     ticketReply: (id) => `/admin/tickets/${id}/reply`,

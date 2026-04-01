@@ -4,6 +4,8 @@ import Logo from "../components/Logo";
 import { useBrand } from "../context/BrandContext";
 import "./Login.css";
 import { useAuth } from "../context/AuthContext";
+import { authApi } from "../services/authApi";
+import { showSuccess, showError } from "../services/toast";
 
 export default function Login() {
   const { brand } = useBrand();
@@ -78,11 +80,55 @@ export default function Login() {
 
     setLoading(true);
     try {
-      // TODO: connect to backend API
-      await loginWithEmail({ email: form.email, role: roleFromEmail });
-      showSuccessAndNavigate(roleFromEmail);
+      await authApi.login({
+        email: form.email.trim(),
+        password: form.password,
+      });
+      localStorage.setItem("login_pending_email", form.email.trim());
+      showSuccess("OTP sent to your email. Please verify to continue");
+      setOtpSent(true);
     } catch (e) {
-      setFormError(e?.message || "Unable to login. Please try again.");
+      const msg = e?.message || "Invalid email or password";
+      setFormError(msg);
+      showError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyEmailOtp = async () => {
+    setFormError("");
+    setSuccessMessage("");
+    setFieldErrors({});
+
+    if (!validateOtp(form.otp)) {
+      setFieldErrors({ otp: "OTP must be 6 digits." });
+      return;
+    }
+
+    const pendingEmail =
+      localStorage.getItem("login_pending_email") || form.email.trim();
+    const role = pendingEmail.toLowerCase().includes("admin")
+      ? "admin"
+      : "user";
+
+    setLoading(true);
+    try {
+      const response = await authApi.verifyOtp({
+        email: pendingEmail,
+        otp: form.otp,
+      });
+      const token =
+        response?.token || response?.accessToken || response?.data?.token || "";
+      await loginWithEmail({ email: pendingEmail, role });
+      if (token) localStorage.setItem("ui-access-token", token);
+      localStorage.removeItem("login_pending_email");
+      showSuccess("Login successful");
+      showSuccessAndNavigate(role);
+    } catch (e) {
+      const msg = e?.message || "Invalid OTP";
+      setFormError(msg);
+      showError(msg);
     } finally {
       setLoading(false);
     }
@@ -139,7 +185,7 @@ export default function Login() {
       });
       showSuccessAndNavigate(roleFromEmail);
     } catch (e) {
-      setFormError(e?.message || "Unable to verify OTP (mock). Please try again.");
+      setFormError(e?.message || "Unable to verify OTP. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -160,7 +206,11 @@ export default function Login() {
           </div>
 
           <div className="method-tabs-row">
-            <div className="method-tabs" role="tablist" aria-label="Login methods">
+            <div
+              className="method-tabs"
+              role="tablist"
+              aria-label="Login methods"
+            >
               <button
                 type="button"
                 className={`method-tab ${method === "email" ? "active" : ""}`}
@@ -195,9 +245,11 @@ export default function Login() {
           </div>
 
           {formError && <div className="auth-error">{formError}</div>}
-          {successMessage && <div className="auth-success">{successMessage}</div>}
+          {successMessage && (
+            <div className="auth-success">{successMessage}</div>
+          )}
 
-          {method === "email" && (
+          {method === "email" && !otpSent && (
             <form
               className="login-form"
               onSubmit={(e) => {
@@ -262,7 +314,9 @@ export default function Login() {
                 className="forgot-password"
                 onClick={() => {
                   // TODO: connect to backend API for real reset flow
-                  alert("Forgot password flow is not connected to a backend yet.");
+                  alert(
+                    "Forgot password flow is not connected to a backend yet.",
+                  );
                 }}
               >
                 Forgot Password?
@@ -282,6 +336,65 @@ export default function Login() {
                 ) : (
                   "Login"
                 )}
+              </button>
+            </form>
+          )}
+
+          {method === "email" && otpSent && (
+            <form
+              className="login-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleVerifyEmailOtp();
+              }}
+            >
+              <p className="auth-footnote" style={{ marginBottom: "12px" }}>
+                OTP sent to{" "}
+                <strong>
+                  {localStorage.getItem("login_pending_email") || form.email}
+                </strong>
+              </p>
+
+              <label className="field-label" htmlFor="email-otp">
+                OTP
+              </label>
+              <input
+                id="email-otp"
+                type="text"
+                inputMode="numeric"
+                className={`input ${fieldErrors.otp ? "input-invalid" : ""}`}
+                placeholder="Enter 6-digit OTP"
+                value={form.otp}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, otp: e.target.value }))
+                }
+              />
+              {fieldErrors.otp && (
+                <div className="field-error">{fieldErrors.otp}</div>
+              )}
+
+              <button
+                type="button"
+                className="btn btn-primary login-btn"
+                onClick={handleVerifyEmailOtp}
+                disabled={loading}
+              >
+                {loading ? "Verifying..." : "Verify & Login"}
+              </button>
+
+              <button
+                type="button"
+                className="btn btn-primary btn-ghost login-btn login-ghost-btn"
+                onClick={() => {
+                  setOtpSent(false);
+                  setForm((prev) => ({ ...prev, otp: "" }));
+                  setFieldErrors({});
+                  setFormError("");
+                  localStorage.removeItem("login_pending_email");
+                }}
+                disabled={loading}
+              >
+                Change email
               </button>
             </form>
           )}
@@ -394,7 +507,9 @@ export default function Login() {
                 </>
               )}
 
-              <div className="auth-footnote">Demo tip: any 6-digit OTP works.</div>
+              <div className="auth-footnote">
+                Demo tip: any 6-digit OTP works.
+              </div>
             </form>
           )}
 
@@ -412,7 +527,7 @@ export default function Login() {
             </button>
           </div>
           <div className="auth-footnote">
-            Email and OTP logins are mock-only for now (no live backend).
+            Email login connected. OTP verification in progress.
           </div>
 
           <p className="signup-prompt">

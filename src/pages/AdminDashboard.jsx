@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useBrand } from "../context/BrandContext";
 import { getInitials, useAuth } from "../context/AuthContext";
-import { adminApi } from "../services";
+import { useAdminDashboard } from "../hooks/useAdminDashboard";
 import "./AdminDashboard.css";
 
 const ADMIN_SIDEBAR_ITEMS = [
@@ -31,317 +31,6 @@ const ADMIN_SIDEBAR_ITEMS = [
   },
 ];
 
-const ADMIN_STATS = [
-  {
-    label: "Total Users",
-    value: "12,450",
-    delta: "",
-    tone: "cool",
-    icon: "users",
-    points: "0,18 9,15 18,17 27,13 36,10 45,11 54,8 64,9 74,7 84,6 94,8 100,7",
-  },
-  {
-    label: "Active Users",
-    value: "3,220",
-    delta: "+ 5.4%",
-    tone: "cool",
-    icon: "activity",
-    points: "0,19 9,16 18,17 27,14 36,12 45,13 54,10 64,8 74,9 84,7 94,8 100,6",
-  },
-  {
-    label: "Total Apps",
-    value: "150",
-    delta: "",
-    tone: "cool",
-    icon: "apps",
-    points: "0,16 9,14 18,15 27,12 36,9 45,10 54,8 64,6 74,7 84,8 94,9 100,8",
-  },
-  {
-    label: "Revenue",
-    value: "$18,750",
-    delta: "",
-    tone: "mint",
-    icon: "billing",
-    points: "0,20 9,17 18,15 27,13 36,12 45,10 54,8 64,9 74,7 84,6 94,4 100,3",
-  },
-  {
-    label: "Open Tickets",
-    value: "34",
-    delta: "",
-    tone: "cool",
-    icon: "tickets",
-    points:
-      "0,18 9,16 18,14 27,12 36,11 45,12 54,13 64,14 74,13 84,12 94,11 100,10",
-  },
-];
-
-const APPS = [
-  {
-    name: "KYC Manager",
-    category: "Compliance",
-    owner: "Ops Team",
-    health: "Healthy",
-  },
-  {
-    name: "Invoice Hub",
-    category: "Billing",
-    owner: "Finance Team",
-    health: "Warning",
-  },
-  {
-    name: "Org Registry",
-    category: "Operations",
-    owner: "Admin Team",
-    health: "Healthy",
-  },
-  {
-    name: "Support Console",
-    category: "Support",
-    owner: "Support Team",
-    health: "Healthy",
-  },
-];
-
-const PAYMENTS = [
-  {
-    user: "John Doe",
-    initials: "JD",
-    time: "10 mins ago",
-    amount: "$120.00",
-    status: "Paid",
-  },
-  {
-    user: "Sarah Lee",
-    initials: "SL",
-    time: "1 hour ago",
-    amount: "$85.00",
-    status: "Paid",
-  },
-  {
-    user: "Michael Smith",
-    initials: "MS",
-    time: "3 hours ago",
-    amount: "$56.00",
-    status: "Failed",
-  },
-  {
-    user: "Emily Clark",
-    initials: "EC",
-    time: "1 day ago",
-    amount: "$99.00",
-    status: "Paid",
-  },
-];
-
-const USERS = [
-  {
-    id: "001",
-    name: "John Doe",
-    email: "john.doe@example.com",
-    role: "Admin",
-    joinedOn: "Today",
-    status: "Active",
-    isActive: true,
-  },
-  {
-    id: "002",
-    name: "Jane Smith",
-    email: "jane.smith@example.com",
-    role: "Editor",
-    joinedOn: "23 Aug 2025",
-    status: "Active",
-    isActive: true,
-  },
-  {
-    id: "003",
-    name: "Michael Brown",
-    email: "michael.brown@example.com",
-    role: "User",
-    joinedOn: "22 Aug 2025",
-    status: "Inactive",
-    isActive: false,
-  },
-  {
-    id: "004",
-    name: "Emily Clark",
-    email: "emily.clark@example.com",
-    role: "User",
-    joinedOn: "21 Aug 2025",
-    status: "Active",
-    isActive: true,
-  },
-  {
-    id: "005",
-    name: "David Wilson",
-    email: "david.wilson@example.com",
-    role: "User",
-    joinedOn: "20 Aug 2025",
-    status: "Pending",
-    isActive: false,
-  },
-  {
-    id: "006",
-    name: "Sarah Lee",
-    email: "sarah.lee@example.com",
-    role: "Editor",
-    joinedOn: "19 Aug 2025",
-    status: "Inactive",
-    isActive: false,
-  },
-  {
-    id: "007",
-    name: "Chris Johnson",
-    email: "chris.johnson@example.com",
-    role: "User",
-    joinedOn: "18 Aug 2025",
-    status: "Active",
-    isActive: true,
-  },
-  {
-    id: "008",
-    name: "Lisa White",
-    email: "lisa.white@example.com",
-    role: "User",
-    joinedOn: "17 Aug 2025",
-    status: "Inactive",
-    isActive: false,
-  },
-  {
-    id: "009",
-    name: "Ava Miller",
-    email: "ava.miller@example.com",
-    role: "Admin",
-    joinedOn: "16 Aug 2025",
-    status: "Active",
-    isActive: true,
-  },
-  {
-    id: "010",
-    name: "Liam Davis",
-    email: "liam.davis@example.com",
-    role: "User",
-    joinedOn: "15 Aug 2025",
-    status: "Pending",
-    isActive: false,
-  },
-  {
-    id: "011",
-    name: "Noah Taylor",
-    email: "noah.taylor@example.com",
-    role: "Editor",
-    joinedOn: "14 Aug 2025",
-    status: "Active",
-    isActive: true,
-  },
-  {
-    id: "012",
-    name: "Mia Anderson",
-    email: "mia.anderson@example.com",
-    role: "User",
-    joinedOn: "13 Aug 2025",
-    status: "Inactive",
-    isActive: false,
-  },
-];
-
-const KYC_REQUESTS = USERS.filter((user) => user.role === "User").map(
-  (user, index) => ({
-    id: `KYC-${2200 + index}`,
-    userId: user.id,
-    userName: user.name,
-    userEmail: user.email,
-    submittedAt: user.joinedOn,
-    documentType: index % 2 === 0 ? "Aadhaar" : "PAN",
-    status:
-      index % 4 === 0
-        ? "Pending"
-        : index % 4 === 1
-          ? "Approved"
-          : index % 4 === 2
-            ? "Rejected"
-            : "Need Info",
-  }),
-);
-
-const TICKETS = [
-  {
-    id: "TK-2201",
-    userName: "John Doe",
-    userEmail: "john.doe@example.com",
-    subject: "Login issue after password reset",
-    description:
-      "User is unable to sign in after resetting password. The reset flow finishes successfully, but login still returns invalid credentials.",
-    status: "Open",
-    priority: "High",
-    date: "2026-03-27",
-    conversation: [
-      {
-        id: "m-1",
-        sender: "user",
-        text: "I reset my password but still cannot log in.",
-        time: "09:15 AM",
-      },
-      {
-        id: "m-2",
-        sender: "admin",
-        text: "Thanks for reporting. We are checking your account status now.",
-        time: "09:22 AM",
-      },
-    ],
-  },
-  {
-    id: "TK-2194",
-    userName: "Sarah Lee",
-    userEmail: "sarah.lee@example.com",
-    subject: "Invoice shows duplicate charge",
-    description:
-      "March invoice contains a duplicate transaction entry for the same order reference.",
-    status: "Pending",
-    priority: "Medium",
-    date: "2026-03-25",
-    conversation: [
-      {
-        id: "m-3",
-        sender: "user",
-        text: "I was charged twice for one payment.",
-        time: "11:08 AM",
-      },
-    ],
-  },
-  {
-    id: "TK-2179",
-    userName: "Emily Clark",
-    userEmail: "emily.clark@example.com",
-    subject: "Need CSV export in profile page",
-    description:
-      "Requested CSV export option for activity history inside profile section.",
-    status: "Resolved",
-    priority: "Low",
-    date: "2026-03-22",
-    conversation: [
-      {
-        id: "m-4",
-        sender: "user",
-        text: "Can we export activity history as CSV?",
-        time: "03:10 PM",
-      },
-      {
-        id: "m-5",
-        sender: "admin",
-        text: "Great suggestion. We have added this to roadmap.",
-        time: "03:35 PM",
-      },
-    ],
-  },
-];
-
-const ACTIVITY_FEED = [
-  { time: "10 mins ago", event: "New user registered", meta: "" },
-  { time: "2 hrs ago", event: 'App "Task Manager" added', meta: "" },
-  { time: "4 hrs ago", event: "Payment of $56.00 failed", meta: "" },
-];
-
-const USER_GROWTH = [1200, 3600, 3300, 5600, 4300, 6500, 7800, 9800];
 const Y_AXIS_LABELS = ["10k", "5k"];
 const X_AXIS_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
 
@@ -459,27 +148,6 @@ function TicketBadge({ type, value }) {
   return <span className={`ticket-badge ${type} ${normalized}`}>{value}</span>;
 }
 
-function normalizeTicketItem(ticket, index = 0) {
-  const subject = ticket.subject || ticket.title || "Untitled Ticket";
-  return {
-    id: ticket.id || `TK-${index + 1}`,
-    userName: ticket.userName || ticket.user || "Unknown User",
-    userEmail: ticket.userEmail || "user@example.com",
-    subject,
-    description: ticket.description || subject,
-    status: ["Open", "Pending", "Resolved"].includes(ticket.status)
-      ? ticket.status
-      : ticket.status === "New"
-        ? "Open"
-        : "Pending",
-    priority: ["Low", "Medium", "High"].includes(ticket.priority)
-      ? ticket.priority
-      : "Medium",
-    date: ticket.date || new Date().toISOString().slice(0, 10),
-    conversation: Array.isArray(ticket.conversation) ? ticket.conversation : [],
-  };
-}
-
 export default function AdminDashboard() {
   const { brand, setBrand, resetBrand, defaultBrand } = useBrand();
   const { user, logout } = useAuth();
@@ -489,24 +157,43 @@ export default function AdminDashboard() {
   const pathParts = location.pathname.split("/").filter(Boolean);
   const pageKey = pathParts[1] || "dashboard";
 
+  // ── Data layer ──────────────────────────────────────────────────────────────
+  const {
+    adminStats,
+    payments,
+    tickets,
+    ticketsLoading,
+    activityFeed,
+    userGrowth,
+    users,
+    uploadedApps,
+    kycRequests,
+    notificationItems,
+    userCountStats,
+    kycStats,
+    ticketStats,
+    updateUserStatus,
+    fetchExportUsers,
+    updateKycStatus,
+    updateTicketStatus,
+    sendTicketReply,
+    createApp,
+    updateApp,
+    deleteApp,
+    markNotificationRead,
+    markAllNotificationsRead,
+  } = useAdminDashboard();
+
+  // ── UI state ────────────────────────────────────────────────────────────────
   const [brandingForm, setBrandingForm] = useState(brand);
   const [searchText, setSearchText] = useState("");
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [adminStats, setAdminStats] = useState(ADMIN_STATS);
-  const [apps, setApps] = useState(APPS);
-  const [payments, setPayments] = useState(PAYMENTS);
-  const [tickets, setTickets] = useState(TICKETS);
-  const [ticketsLoading, setTicketsLoading] = useState(true);
   const [ticketSearchText, setTicketSearchText] = useState("");
   const [ticketStatusFilter, setTicketStatusFilter] = useState("All");
   const [ticketPriorityFilter, setTicketPriorityFilter] = useState("All");
   const [selectedTicketId, setSelectedTicketId] = useState(null);
   const [ticketReplyText, setTicketReplyText] = useState("");
-  const [activityFeed, setActivityFeed] = useState(ACTIVITY_FEED);
-  const [userGrowth, setUserGrowth] = useState(USER_GROWTH);
-  const [uploadedApps, setUploadedApps] = useState([]);
-  const [appsInitialized, setAppsInitialized] = useState(false);
   const [appSearchText, setAppSearchText] = useState("");
   const [appForm, setAppForm] = useState({
     name: "",
@@ -514,24 +201,13 @@ export default function AdminDashboard() {
     logoUrl: "",
   });
   const [editingAppId, setEditingAppId] = useState(null);
-  const [users, setUsers] = useState(USERS);
   const [userSearchText, setUserSearchText] = useState("");
   const [userStatusFilter, setUserStatusFilter] = useState("All");
   const [userRoleFilter, setUserRoleFilter] = useState("All");
   const [userViewFilter, setUserViewFilter] = useState("All");
   const [usersPage, setUsersPage] = useState(1);
-  const [kycRequests, setKycRequests] = useState(KYC_REQUESTS);
   const [kycSearchText, setKycSearchText] = useState("");
   const [kycStatusFilter, setKycStatusFilter] = useState("All");
-  const [notificationItems, setNotificationItems] = useState(
-    ACTIVITY_FEED.map((item, index) => ({
-      id: `${item.time}-${index}`,
-      title: item.event,
-      meta: item.meta,
-      time: item.time,
-      read: index > 1,
-    })),
-  );
 
   const menuRef = useRef(null);
   const searchQuery = searchText.trim().toLowerCase();
@@ -552,97 +228,9 @@ export default function AdminDashboard() {
     return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadAdminData = async () => {
-      const [dashboardData, usersData, ticketsData] = await Promise.all([
-        adminApi.getDashboardData(),
-        adminApi.getUsers(),
-        adminApi.getTickets(),
-      ]);
-
-      if (!isMounted) return;
-
-      if (dashboardData?.stats) setAdminStats(dashboardData.stats);
-      if (dashboardData?.apps) setApps(dashboardData.apps);
-      if (dashboardData?.payments) setPayments(dashboardData.payments);
-      const ticketsFromDashboard = Array.isArray(dashboardData?.tickets)
-        ? dashboardData.tickets
-        : [];
-      const ticketsFromApi = Array.isArray(ticketsData?.items)
-        ? ticketsData.items
-        : [];
-      const effectiveTickets =
-        ticketsFromApi.length > 0 ? ticketsFromApi : ticketsFromDashboard;
-      if (effectiveTickets.length) {
-        setTickets(
-          effectiveTickets.map((ticket, index) =>
-            normalizeTicketItem(ticket, index),
-          ),
-        );
-      }
-      if (dashboardData?.activityFeed)
-        setActivityFeed(dashboardData.activityFeed);
-      if (dashboardData?.userGrowth) setUserGrowth(dashboardData.userGrowth);
-
-      const fetchedUsers = Array.isArray(usersData?.items)
-        ? usersData.items
-        : null;
-      if (fetchedUsers && fetchedUsers.length) {
-        setUsers(fetchedUsers);
-      }
-
-      setTicketsLoading(false);
-    };
-
-    loadAdminData();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    setNotificationItems((prev) =>
-      activityFeed.map((item, index) => {
-        const id = `${item.time}-${index}`;
-        const existing = prev.find((entry) => entry.id === id);
-
-        return {
-          id,
-          title: item.event,
-          meta: item.meta,
-          time: item.time,
-          read: existing ? existing.read : index > 1,
-        };
-      }),
-    );
-  }, [activityFeed]);
-
   const unreadCount = notificationItems.filter((item) => !item.read).length;
 
-  const normalizedApps = useMemo(
-    () =>
-      (apps || []).map((item, index) => ({
-        id: item.id || `${item.name || "app"}-${index}`,
-        name: item.name || "Untitled App",
-        description:
-          item.description ||
-          `${item.category || "General"}${item.owner ? ` • ${item.owner}` : ""}`,
-        logoUrl: item.logoUrl || "",
-        status: item.status || (item.health === "Healthy" ? "Active" : "Draft"),
-      })),
-    [apps],
-  );
-
-  useEffect(() => {
-    if (!appsInitialized && normalizedApps.length) {
-      setUploadedApps(normalizedApps);
-      setAppsInitialized(true);
-    }
-  }, [appsInitialized, normalizedApps]);
-
+  // ── Filtered views (UI state + data) ───────────────────────────────────────────
   const filteredUsers = useMemo(() => {
     if (!searchQuery) return users;
     return users.filter((item) =>
@@ -683,36 +271,6 @@ export default function AdminDashboard() {
     return userManagementRows.slice(start, start + userPageSize);
   }, [userManagementRows, usersPage]);
 
-  const userCountStats = useMemo(() => {
-    const total = users.length;
-    const active = users.filter((user) => user.status === "Active").length;
-    const inactive = users.filter((user) => user.status === "Inactive").length;
-    const pending = users.filter((user) => user.status === "Pending").length;
-    return { total, active, inactive, pending };
-  }, [users]);
-
-  useEffect(() => {
-    setKycRequests((prev) => {
-      const statusByUserId = new Map(
-        prev.map((request) => [request.userId, request.status]),
-      );
-
-      const next = users
-        .filter((user) => user.role === "User")
-        .map((user, index) => ({
-          id: `KYC-${2200 + index}`,
-          userId: user.id,
-          userName: user.name,
-          userEmail: user.email,
-          submittedAt: user.joinedOn,
-          documentType: index % 2 === 0 ? "Aadhaar" : "PAN",
-          status: statusByUserId.get(user.id) || "Pending",
-        }));
-
-      return next;
-    });
-  }, [users]);
-
   const filteredKycRows = useMemo(() => {
     const query = kycSearchText.trim().toLowerCase();
 
@@ -727,23 +285,6 @@ export default function AdminDashboard() {
       return matchesQuery && matchesStatus;
     });
   }, [kycRequests, kycSearchText, kycStatusFilter]);
-
-  const kycStats = useMemo(() => {
-    const total = kycRequests.length;
-    const pending = kycRequests.filter(
-      (item) => item.status === "Pending",
-    ).length;
-    const approved = kycRequests.filter(
-      (item) => item.status === "Approved",
-    ).length;
-    const rejected = kycRequests.filter(
-      (item) => item.status === "Rejected",
-    ).length;
-    const needInfo = kycRequests.filter(
-      (item) => item.status === "Need Info",
-    ).length;
-    return { total, pending, approved, rejected, needInfo };
-  }, [kycRequests]);
 
   useEffect(() => {
     setUsersPage(1);
@@ -783,16 +324,6 @@ export default function AdminDashboard() {
     );
   }, [searchQuery, tickets]);
 
-  const ticketStats = useMemo(() => {
-    const total = tickets.length;
-    const open = tickets.filter((item) => item.status === "Open").length;
-    const pending = tickets.filter((item) => item.status === "Pending").length;
-    const resolved = tickets.filter(
-      (item) => item.status === "Resolved",
-    ).length;
-    return { total, open, pending, resolved };
-  }, [tickets]);
-
   const filteredTicketRows = useMemo(() => {
     const query = ticketSearchText.trim().toLowerCase();
     return tickets.filter((ticket) => {
@@ -822,100 +353,53 @@ export default function AdminDashboard() {
     );
   }, [searchQuery, activityFeed]);
 
-  const handleMarkAllNotificationsRead = () => {
-    setNotificationItems((prev) =>
-      prev.map((item) => ({ ...item, read: true })),
-    );
-  };
+  const handleMarkAllNotificationsRead = () => markAllNotificationsRead();
 
   const handleNotificationItemClick = (id) => {
-    setNotificationItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, read: true } : item)),
-    );
+    markNotificationRead(id);
     setShowNotifications(false);
     navigate("/admin/notifications");
   };
 
-  const handleUserStatusToggle = async (userId) => {
-    const target = users.find((item) => item.id === userId);
-    if (!target) return;
-
-    const nextStatus = target.status === "Active" ? "Inactive" : "Active";
-    await adminApi.updateUserStatus(userId, nextStatus);
-
-    setUsers((prev) =>
-      prev.map((user) => {
-        if (user.id !== userId) return user;
-        if (user.status === "Active") {
-          return { ...user, status: "Inactive", isActive: false };
-        }
-        return { ...user, status: "Active", isActive: true };
-      }),
-    );
-  };
+  const handleUserStatusToggle = (userId) => updateUserStatus(userId);
 
   const handleUserEdit = (userId) => {
-    const user = users.find((item) => item.id === userId);
-    if (!user) return;
-    window.alert(`Open edit modal for ${user.name} (ID: ${user.id})`);
+    const found = users.find((item) => item.id === userId);
+    if (!found) return;
+    window.alert(`Open edit modal for ${found.name} (ID: ${found.id})`);
   };
 
-  const handleUsersExport = () => {
-    const exportUsers = async () => {
-      const rowsFromApi = await adminApi.exportUsers({
-        status: userStatusFilter,
-        role: userRoleFilter,
-        q: userSearchText,
-      });
-
-      const rows =
-        Array.isArray(rowsFromApi) && rowsFromApi.length
-          ? rowsFromApi
-          : userManagementRows.length
-            ? userManagementRows
-            : users;
-      const header = ["ID", "Name", "Email", "Role", "Status"];
-      const csvLines = [
-        header.join(","),
-        ...rows.map((user) =>
-          [user.id, user.name, user.email, user.role, user.status]
-            .map((cell) => `"${String(cell).replaceAll('"', '""')}"`)
-            .join(","),
-        ),
-      ];
-
-      const blob = new Blob([csvLines.join("\n")], {
-        type: "text/csv;charset=utf-8;",
-      });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.setAttribute("download", "users-export.csv");
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-    };
-
-    exportUsers();
-  };
-
-  const updateKycStatus = (requestId, nextStatus) => {
-    // TODO: connect to backend API for KYC verification update.
-    setKycRequests((prev) =>
-      prev.map((request) =>
-        request.id === requestId ? { ...request, status: nextStatus } : request,
+  const handleUsersExport = async () => {
+    const rowsFromApi = await fetchExportUsers({
+      status: userStatusFilter,
+      role: userRoleFilter,
+      q: userSearchText,
+    });
+    const rows = rowsFromApi
+      ? rowsFromApi
+      : userManagementRows.length
+        ? userManagementRows
+        : users;
+    const header = ["ID", "Name", "Email", "Role", "Status"];
+    const csvLines = [
+      header.join(","),
+      ...rows.map((user) =>
+        [user.id, user.name, user.email, user.role, user.status]
+          .map((cell) => `"${String(cell).replaceAll('"', '""')}"`)
+          .join(","),
       ),
-    );
-  };
-
-  const updateTicketStatus = async (ticketId, nextStatus) => {
-    await adminApi.updateTicketStatus(ticketId, nextStatus);
-    setTickets((prev) =>
-      prev.map((ticket) =>
-        ticket.id === ticketId ? { ...ticket, status: nextStatus } : ticket,
-      ),
-    );
+    ];
+    const blob = new Blob([csvLines.join("\n")], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "users-export.csv");
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
   };
 
   const handleViewTicket = (ticketId) => {
@@ -931,29 +415,7 @@ export default function AdminDashboard() {
   const handleSendTicketReply = async () => {
     const message = ticketReplyText.trim();
     if (!selectedTicket || !message) return;
-
-    const newMessage = {
-      id: `admin-${Date.now()}`,
-      sender: "admin",
-      text: message,
-      time: new Date().toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    };
-
-    await adminApi.addTicketReply(selectedTicket.id, newMessage);
-
-    setTickets((prev) =>
-      prev.map((ticket) => {
-        if (ticket.id !== selectedTicket.id) return ticket;
-        return {
-          ...ticket,
-          conversation: [...ticket.conversation, newMessage],
-        };
-      }),
-    );
-
+    await sendTicketReply(selectedTicket, message);
     setTicketReplyText("");
   };
 
@@ -996,34 +458,17 @@ export default function AdminDashboard() {
     }
 
     if (editingAppId) {
-      await adminApi.updateApp(editingAppId, {
+      await updateApp(editingAppId, {
         name,
         description,
         logoUrl: appForm.logoUrl,
         status: "Active",
       });
-
-      setUploadedApps((prev) =>
-        prev.map((app) =>
-          app.id === editingAppId
-            ? { ...app, name, description, logoUrl: appForm.logoUrl }
-            : app,
-        ),
-      );
       resetAppForm();
       return;
     }
 
-    const newApp = {
-      id: `APP-${Date.now()}`,
-      name,
-      description,
-      logoUrl: appForm.logoUrl,
-      status: "Active",
-    };
-
-    await adminApi.createApp(newApp);
-    setUploadedApps((prev) => [newApp, ...prev]);
+    await createApp({ name, description, logoUrl: appForm.logoUrl });
     resetAppForm();
   };
 
@@ -1039,13 +484,8 @@ export default function AdminDashboard() {
   const handleAppDelete = async (appId) => {
     const confirmed = window.confirm("Delete this app?");
     if (!confirmed) return;
-
-    await adminApi.deleteApp(appId);
-    setUploadedApps((prev) => prev.filter((app) => app.id !== appId));
-
-    if (editingAppId === appId) {
-      resetAppForm();
-    }
+    await deleteApp(appId);
+    if (editingAppId === appId) resetAppForm();
   };
 
   const handleBrandFieldChange = (key, value) => {
@@ -1078,13 +518,14 @@ export default function AdminDashboard() {
   const renderPage = () => {
     if (pageKey === "dashboard" || pageKey === "analytics") {
       const growthData =
-        Array.isArray(userGrowth) && userGrowth.length
+        Array.isArray(userGrowth) && userGrowth.length >= 2
           ? userGrowth
-          : USER_GROWTH;
-      const maxGrowth = Math.max(...growthData);
+          : [0, 0];
+      const maxGrowth = Math.max(...growthData) || 1;
+      const divisor = Math.max(growthData.length - 1, 1);
       const points = growthData
         .map((value, index) => {
-          const x = 30 + (index * 760) / (growthData.length - 1);
+          const x = 30 + (index * 760) / divisor;
           const y = 220 - (value / maxGrowth) * 165;
           return `${x},${y}`;
         })
@@ -1092,7 +533,7 @@ export default function AdminDashboard() {
       return (
         <div className="page-stack">
           <section className="stats-grid">
-            {adminStats.map((card) => (
+            {(adminStats || []).map((card) => (
               <article key={card.label} className={`metric-card ${card.tone}`}>
                 <p className="metric-label">{card.label}</p>
                 <p className="metric-value">{card.value}</p>
@@ -1146,7 +587,7 @@ export default function AdminDashboard() {
                     className="area"
                   />
                   <polyline points={points} className="line" />
-                  {points.split(" ").map((point) => {
+                  {(points ? points.split(" ") : []).map((point) => {
                     const [cx, cy] = point.split(",");
                     return (
                       <circle

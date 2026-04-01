@@ -58,6 +58,14 @@ export const adminApi = {
     });
   },
 
+  async updateKycStatus(requestId, status) {
+    return safeServiceCall({
+      request: () =>
+        apiClient.patch(endpoints.admin.kycStatus(requestId), { status }),
+      fallback: { success: true, id: requestId, status },
+    });
+  },
+
   async getTickets(params) {
     return safeServiceCall({
       request: () => apiClient.get(endpoints.admin.tickets, { query: params }),

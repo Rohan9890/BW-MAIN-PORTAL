@@ -153,9 +153,9 @@
 
 .admin-topbar h2 {
   margin: 4px 0 0;
-  font-size: 26px;
-  line-height: 1.05;
-  letter-spacing: -0.5px;
+  font-size: 18px;
+  line-height: 1.1;
+  letter-spacing: -0.3px;
 }
 
 .topbar-actions {
@@ -392,6 +392,17 @@
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
   position: relative;
   overflow: hidden;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.metric-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 32px rgba(37, 99, 235, 0.14);
+  border-color: rgba(37, 99, 235, 0.22);
 }
 
 .metric-card.cool {
@@ -414,17 +425,19 @@
 
 .metric-label {
   margin: 0;
-  color: #334155;
-  font-size: 33px;
-  font-weight: 700;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
 }
 
 .metric-value {
-  margin: 8px 0 0;
-  font-size: 40px;
-  line-height: 1.05;
+  margin: 4px 0 0;
+  font-size: 22px;
+  line-height: 1.15;
   font-weight: 700;
-  letter-spacing: 0;
+  letter-spacing: -0.3px;
   color: #1e293b;
 }
 
@@ -781,6 +794,17 @@
   padding: 10px 12px;
   display: grid;
   gap: 6px;
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.users-metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.1);
+  border-color: #93c5fd;
 }
 
 .users-metric-head {
@@ -798,9 +822,9 @@
 
 .users-metric-card strong {
   color: #1f2937;
-  font-size: 31px;
+  font-size: 18px;
   line-height: 1;
-  letter-spacing: -0.4px;
+  letter-spacing: -0.2px;
 }
 
 .users-metric-icon {
@@ -1261,6 +1285,17 @@
   background: #fff;
   padding: 12px;
   box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+  cursor: pointer;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.tickets-stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+  border-color: #93c5fd;
 }
 
 .tickets-stat-card p {
@@ -1273,7 +1308,7 @@
 .tickets-stat-card strong {
   display: block;
   margin-top: 6px;
-  font-size: 28px;
+  font-size: 18px;
   line-height: 1;
   color: #0f172a;
 }

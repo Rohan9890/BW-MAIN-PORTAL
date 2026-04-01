@@ -2,6 +2,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMemo, useState } from "react";
 import Logo from "../components/Logo";
 import { authApi } from "../services";
+import { showSuccess, showError } from "../services/toast";
 import "./Registration.css";
 
 const INDIVIDUAL_FIELDS = [
@@ -34,7 +35,11 @@ const REG_TYPES = {
     kycHint: "Addhar card, Passport, vote id.",
     icon: "👤",
     sections: [
-      { title: "Personal Info", subtitle: "Your identity basics.", fields: ["fullName"] },
+      {
+        title: "Personal Info",
+        subtitle: "Your identity basics.",
+        fields: ["fullName"],
+      },
       {
         title: "Contact Details",
         subtitle: "Where we can reach you.",
@@ -46,7 +51,15 @@ const REG_TYPES = {
         fields: ["password", "referral"],
       },
     ],
-    requiredFields: ["fullName", "email", "password", "phone", "city", "zip", "street"],
+    requiredFields: [
+      "fullName",
+      "email",
+      "password",
+      "phone",
+      "city",
+      "zip",
+      "street",
+    ],
   },
   organization: {
     label: "Organization Registration",
@@ -55,7 +68,11 @@ const REG_TYPES = {
     kycHint: "Company Registration",
     icon: "💼",
     sections: [
-      { title: "Organization Info", subtitle: "Company identity.", fields: ["orgName"] },
+      {
+        title: "Organization Info",
+        subtitle: "Company identity.",
+        fields: ["orgName"],
+      },
       {
         title: "Contact Person",
         subtitle: "Primary contact details.",
@@ -72,12 +89,22 @@ const REG_TYPES = {
         fields: ["password", "referral"],
       },
     ],
-    requiredFields: ["orgName", "contactName", "email", "password", "billing", "phone", "shipping"],
+    requiredFields: [
+      "orgName",
+      "contactName",
+      "email",
+      "password",
+      "billing",
+      "phone",
+      "shipping",
+    ],
   },
 };
 
 function getInitialTypeFromPath(pathname) {
-  return pathname.includes("/register/organization") ? "organization" : "individual";
+  return pathname.includes("/register/organization")
+    ? "organization"
+    : "individual";
 }
 
 function validateEmail(value) {
@@ -141,7 +168,10 @@ function getFieldIcon(fieldName) {
 export default function Registration() {
   const navigate = useNavigate();
   const location = useLocation();
-  const initial = useMemo(() => getInitialTypeFromPath(location.pathname), [location.pathname]);
+  const initial = useMemo(
+    () => getInitialTypeFromPath(location.pathname),
+    [location.pathname],
+  );
   const [type, setType] = useState(initial);
   const [formData, setFormData] = useState({});
   const [termsAccepted, setTermsAccepted] = useState(true);
@@ -153,13 +183,17 @@ export default function Registration() {
   const config = REG_TYPES[type] ?? REG_TYPES.individual;
 
   const onTypeChange = (nextType) => {
-    const normalized = nextType === "organization" ? "organization" : "individual";
+    const normalized =
+      nextType === "organization" ? "organization" : "individual";
     setType(normalized);
     setFormData({});
     setTouched({});
     setSubmitError("");
     setSubmitSuccess("");
-    navigate(normalized === "organization" ? "/register/organization" : "/register", { replace: true });
+    navigate(
+      normalized === "organization" ? "/register/organization" : "/register",
+      { replace: true },
+    );
   };
 
   const draftErrors = useMemo(() => {
@@ -183,7 +217,8 @@ export default function Registration() {
     return errors;
   }, [config.requiredFields, formData]);
 
-  const canSubmit = !submitting && termsAccepted && Object.keys(draftErrors).length === 0;
+  const canSubmit =
+    !submitting && termsAccepted && Object.keys(draftErrors).length === 0;
 
   const handleSave = async () => {
     setSubmitError("");
@@ -203,17 +238,27 @@ export default function Registration() {
 
     setSubmitting(true);
     try {
-      // TODO: connect to backend API
-      if (type === "organization") {
-        await authApi.registerOrganization(formData);
-      } else {
-        await authApi.registerIndividual(formData);
-      }
+      const payload = {
+        name:
+          formData.fullName || formData.orgName || formData.contactName || "",
+        email: formData.email || "",
+        phoneNumber: formData.phone || "",
+        password: formData.password || "",
+        aadhaarNumber: formData.aadhaarNumber || undefined,
+        panNumber: formData.panNumber || undefined,
+      };
 
+      await authApi.register(payload);
+
+      showSuccess("Registration successful");
       setSubmitSuccess("Registration submitted successfully.");
-      setTimeout(() => navigate("/login"), 850);
+      setFormData({});
+      setTouched({});
+      setTimeout(() => navigate("/login"), 1200);
     } catch (e) {
-      setSubmitError(e?.message || "Unable to submit registration. Please try again.");
+      const msg = e?.message || "Registration failed";
+      showError(msg);
+      setSubmitError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -232,7 +277,9 @@ export default function Registration() {
         </header>
 
         <h1 className="reg-title">{config.title}</h1>
-        <p className="reg-subtitle">Enter your details to create a new account.</p>
+        <p className="reg-subtitle">
+          Enter your details to create a new account.
+        </p>
 
         <div className="reg-switch">
           <label className="reg-switch-label" htmlFor="regType">
@@ -274,7 +321,9 @@ export default function Registration() {
 
                 return (
                   <div key={fieldName} className="reg-input-block">
-                    <label className="reg-label">{getFieldLabel(fieldName)}</label>
+                    <label className="reg-label">
+                      {getFieldLabel(fieldName)}
+                    </label>
                     <div
                       className={`reg-input-with-icon ${
                         showError ? "reg-input-invalid" : ""
@@ -284,9 +333,15 @@ export default function Registration() {
                         {getFieldIcon(fieldName)}
                       </span>
                       <input
-                        type={fieldName.toLowerCase().includes("password") ? "password" : "text"}
+                        type={
+                          fieldName.toLowerCase().includes("password")
+                            ? "password"
+                            : "text"
+                        }
                         className="input reg-premium-input"
-                        placeholder={meta?.placeholder || getFieldLabel(fieldName)}
+                        placeholder={
+                          meta?.placeholder || getFieldLabel(fieldName)
+                        }
                         value={value}
                         onChange={(e) =>
                           setFormData((prev) => ({
@@ -294,10 +349,14 @@ export default function Registration() {
                             [fieldName]: e.target.value,
                           }))
                         }
-                        onBlur={() => setTouched((prev) => ({ ...prev, [fieldName]: true }))}
+                        onBlur={() =>
+                          setTouched((prev) => ({ ...prev, [fieldName]: true }))
+                        }
                       />
                     </div>
-                    {showError && <div className="reg-field-error">{error}</div>}
+                    {showError && (
+                      <div className="reg-field-error">{error}</div>
+                    )}
                   </div>
                 );
               })}
@@ -322,7 +381,9 @@ export default function Registration() {
         </label>
 
         {submitError && <div className="reg-submit-error">{submitError}</div>}
-        {submitSuccess && <div className="reg-submit-success">{submitSuccess}</div>}
+        {submitSuccess && (
+          <div className="reg-submit-success">{submitSuccess}</div>
+        )}
 
         <button
           type="button"

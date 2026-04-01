@@ -4,14 +4,28 @@ import { safeServiceCall } from "./serviceUtils";
 import { upsertRegisteredUser } from "./registrationStore";
 
 export const authApi = {
+  /**
+   * Register a new user via the production backend.
+   * Payload shape: { name, email, phoneNumber, password, aadhaarNumber, panNumber }
+   */
+  async register(payload) {
+    return apiClient.post(endpoints.auth.register, payload);
+  },
+
+  /**
+   * Trigger OTP generation — backend does NOT return a token here.
+   * Payload: { email, password }
+   */
   async login(payload) {
-    return safeServiceCall({
-      request: () => apiClient.post(endpoints.auth.login, payload),
-      fallback: {
-        token: "mock-token",
-        user: { id: "u-1", name: "Demo User", role: "User" },
-      },
-    });
+    return apiClient.post(endpoints.auth.login, payload);
+  },
+
+  /**
+   * Verify OTP after login — backend returns the JWT token here.
+   * Payload: { email, otp }
+   */
+  async verifyOtp({ email, otp }) {
+    return apiClient.post(endpoints.auth.verifyOtp, { email, otp });
   },
 
   async registerIndividual(payload) {

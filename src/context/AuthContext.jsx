@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { getRegisteredUsers } from "../services/registrationStore";
+import { setLogoutHandler } from "../services/apiClient";
 
 const TOKEN_KEY = "ui-access-token";
 const USER_KEY = "ui-auth-user";
@@ -67,6 +68,12 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
+  // Register the logout function with the axios client so the 401 interceptor
+  // can force a logout without importing AuthContext (avoids circular deps).
+  useEffect(() => {
+    setLogoutHandler(logout);
+  }, []);
+
   const isAuthenticated = !!user;
 
   const persistAuth = (nextUser) => {
@@ -80,9 +87,14 @@ export function AuthProvider({ children }) {
 
   const loginWithEmail = async ({ email, role }) => {
     // TODO: connect to backend API
-    const normalized = String(email || "").trim().toLowerCase();
+    const normalized = String(email || "")
+      .trim()
+      .toLowerCase();
     const stored = getRegisteredUsers().find(
-      (u) => String(u?.email || "").trim().toLowerCase() === normalized,
+      (u) =>
+        String(u?.email || "")
+          .trim()
+          .toLowerCase() === normalized,
     );
     const nextRole = normalizeRole(role);
     const nextUser = {
@@ -170,4 +182,3 @@ export function useAuth() {
   if (!context) throw new Error("useAuth must be used inside AuthProvider");
   return context;
 }
-
