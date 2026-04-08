@@ -471,6 +471,24 @@
   font-size: 1.125rem;
 }
 
+@media (max-width: 1024px) {
+  .payment-content-area {
+    padding: 1rem 0.75rem;
+  }
+
+  .payment-inline-header {
+    padding: 0 14px;
+  }
+
+  .payment-nav {
+    gap: 14px;
+  }
+
+  .payment-layout {
+    padding: 16px;
+  }
+}
+
 @media (max-width: 900px) {
   .payment-layout {
     grid-template-columns: 1fr;
@@ -482,5 +500,84 @@
 
   .order-summary-box {
     width: 100%;
+  }
+}
+
+@media (max-width: 768px) {
+  .payment-page-wrap {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+  }
+
+  .payment-inline-header {
+    height: auto;
+    min-height: 0;
+    padding: 10px 12px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .payment-nav-center {
+    order: 3;
+    width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .payment-nav {
+    min-width: max-content;
+  }
+
+  .payment-banner {
+    padding: 1rem 0.75rem 1.15rem;
+  }
+
+  .payment-banner h1 {
+    padding: 10px 18px;
+  }
+
+  .payment-bottom-bar {
+    padding: 0 12px;
+  }
+}
+
+@media (max-width: 480px) {
+  .payment-content-area {
+    padding: 0.5rem;
+  }
+
+  .payment-layout {
+    padding: 12px;
+    gap: 1rem;
+  }
+
+  .payment-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    padding: 6px;
+  }
+
+  .payment-tab {
+    min-height: 42px;
+  }
+
+  .card-form-row {
+    grid-template-columns: 1fr;
+  }
+
+  .btn-pay-now,
+  .payment-inline-header .btn-primary {
+    min-height: 44px;
+  }
+
+  .payment-bottom-bar {
+    gap: 8px;
+    font-size: 0.9rem;
+  }
+
+  .payment-amount {
+    font-size: 1rem;
   }
 }

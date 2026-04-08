@@ -15,6 +15,7 @@ export default function Login() {
   const [method, setMethod] = useState("email"); // email | phone
   const [otpSent, setOtpSent] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
   const [formError, setFormError] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
@@ -44,6 +45,24 @@ export default function Login() {
   const validateOtp = (value) => {
     const v = String(value || "").trim();
     return /^\d{6}$/.test(v);
+  };
+
+  const getLoginErrorMessage = (error) => {
+    const rawMessage =
+      error?.response?.data?.message ||
+      error?.response?.data?.error ||
+      error?.message ||
+      "Invalid email or password";
+    const normalizedMessage = String(rawMessage).toLowerCase();
+
+    if (
+      normalizedMessage.includes("invalid") ||
+      normalizedMessage.includes("bad credentials")
+    ) {
+      return "Wrong password";
+    }
+
+    return rawMessage;
   };
 
   const isEmailValid = validateEmail(form.email);
@@ -88,7 +107,7 @@ export default function Login() {
       showSuccess("OTP sent to your email. Please verify to continue");
       setOtpSent(true);
     } catch (e) {
-      const msg = e?.message || "Invalid email or password";
+      const msg = getLoginErrorMessage(e);
       setFormError(msg);
       showError(msg);
     } finally {
@@ -106,21 +125,19 @@ export default function Login() {
       return;
     }
 
-    const pendingEmail =
+    const storedEmail =
       localStorage.getItem("login_pending_email") || form.email.trim();
-    const role = pendingEmail.toLowerCase().includes("admin")
-      ? "admin"
-      : "user";
+    const role = storedEmail.toLowerCase().includes("admin") ? "admin" : "user";
 
     setLoading(true);
     try {
       const response = await authApi.verifyOtp({
-        email: pendingEmail,
-        otp: form.otp,
+        email: storedEmail,
+        otp: form.otp.trim(),
       });
       const token =
         response?.token || response?.accessToken || response?.data?.token || "";
-      await loginWithEmail({ email: pendingEmail, role });
+      await loginWithEmail({ email: storedEmail, role });
       if (token) localStorage.setItem("ui-access-token", token);
       localStorage.removeItem("login_pending_email");
       showSuccess("Login successful");
@@ -296,7 +313,7 @@ export default function Login() {
                 </span>
                 <input
                   id="login-password"
-                  type="password"
+                  type={showPassword ? "text" : "password"}
                   className="input"
                   placeholder="Enter your password"
                   value={form.password}
@@ -304,6 +321,15 @@ export default function Login() {
                     setForm((prev) => ({ ...prev, password: e.target.value }))
                   }
                 />
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                >
+                  {showPassword ? "🙈" : "👁"}
+                </button>
               </div>
               {fieldErrors.password && (
                 <div className="field-error">{fieldErrors.password}</div>

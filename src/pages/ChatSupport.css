@@ -373,6 +373,43 @@
   color: #1d4ed8;
 }
 
+@media (max-width: 1024px) {
+  .cs-content {
+    padding: 24px 16px;
+  }
+
+  .cs-card-header,
+  .cs-messages,
+  .cs-input-area {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+@media (max-width: 768px) {
+  .cs-header {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .cs-header-name {
+    font-size: 15px;
+  }
+
+  .cs-content {
+    padding: 16px 12px;
+  }
+
+  .cs-card-subtitle {
+    font-size: 11px;
+  }
+
+  .cs-status-badge {
+    font-size: 11px;
+    padding: 4px 10px;
+  }
+}
+
 /* ── Responsive ── */
 @media (max-width: 640px) {
   .cs-content {
@@ -390,5 +427,30 @@
   }
   .cs-hint {
     padding: 10px 16px 14px;
+  }
+}
+
+@media (max-width: 480px) {
+  .cs-card-header {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .cs-status-badge {
+    margin-left: 0;
+  }
+
+  .cs-bubble {
+    max-width: 86%;
+  }
+
+  .cs-input-area {
+    flex-direction: column;
+  }
+
+  .cs-send-btn,
+  .cs-input {
+    width: 100%;
+    min-height: 44px;
   }
 }

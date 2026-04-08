@@ -4,6 +4,7 @@ import "./Header.css";
 
 export default function Header() {
   const [showPopup, setShowPopup] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
   const navigate = useNavigate();
 
   const handleAvatarClick = () => {
@@ -20,6 +21,20 @@ export default function Header() {
       alert("Logged out");
       // navigate("/login"); // if you add login route later
     }
+  };
+
+  const navItems = [
+    "My Home",
+    "Custom App Space",
+    "Document Management",
+    "Bills Of Materials",
+    "Production Planning",
+    "Lean Manufacturing",
+    "More ▾",
+  ];
+
+  const handleNavClick = () => {
+    setShowMobileMenu(false);
   };
 
   return (
@@ -51,18 +66,31 @@ export default function Header() {
               </div>
             )}
           </div>
+          <button
+            type="button"
+            className="menu-toggle"
+            onClick={() => setShowMobileMenu((prev) => !prev)}
+            aria-label="Toggle navigation menu"
+            aria-expanded={showMobileMenu}
+          >
+            ☰
+          </button>
         </div>
       </div>
 
       {/* Blue navbar */}
-      <div className="navbar">
-        <span className="active">My Home</span>
-        <span>Custom App Space</span>
-        <span>Document Management</span>
-        <span>Bills Of Materials</span>
-        <span>Production Planning</span>
-        <span>Lean Manufacturing</span>
-        <span>More ▾</span>
+      <div className={`navbar ${showMobileMenu ? "open" : ""}`}>
+        <div className="navbar-items">
+          {navItems.map((item, index) => (
+            <span
+              key={item}
+              className={index === 0 ? "active" : ""}
+              onClick={handleNavClick}
+            >
+              {item}
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );

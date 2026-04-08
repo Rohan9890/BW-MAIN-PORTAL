@@ -223,6 +223,17 @@
   letter-spacing: 0.05em;
 }
 
+@media (max-width: 1024px) {
+  .registration-page {
+    padding: 0.875rem;
+  }
+
+  .registration-card {
+    max-width: 900px;
+    width: 100%;
+  }
+}
+
 @media (max-width: 640px) {
   .reg-fields {
     grid-template-columns: 1fr;
@@ -245,7 +256,9 @@
   padding: 0.95rem 0.95rem 0.75rem;
   box-shadow: 0 10px 28px rgba(2, 6, 23, 0.04);
   margin-bottom: 0.85rem;
-  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .reg-section-card:hover {
@@ -300,7 +313,9 @@
   align-items: center;
   gap: 0.7rem;
   padding: 0.2rem 0.75rem;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .reg-input-with-icon:focus-within {
@@ -362,7 +377,10 @@
 }
 
 .reg-submit-btn {
-  transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease,
+    opacity 0.15s ease;
 }
 
 .reg-submit-btn:disabled {
@@ -391,5 +409,48 @@
 @media (max-width: 640px) {
   .reg-section-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .registration-page {
+    height: auto;
+    min-height: 100vh;
+    overflow: auto;
+    align-items: flex-start;
+    padding: 0.75rem;
+  }
+
+  .registration-page .registration-card {
+    max-height: none;
+  }
+
+  .registration-card {
+    padding: 0.5rem 1rem 1rem;
+  }
+
+  .reg-header {
+    gap: 0.75rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .registration-page {
+    padding: 0.5rem;
+  }
+
+  .reg-title {
+    font-size: 1.1rem;
+  }
+
+  .reg-tab,
+  .btn-save,
+  .reg-switch-control,
+  .reg-premium-input {
+    min-height: 44px;
+  }
+
+  .reg-section-card {
+    padding: 0.75rem;
   }
 }

@@ -60,11 +60,13 @@ axiosInstance.interceptors.response.use(
 
     // Normalize to a plain Error with a predictable shape so callers don't
     // need to inspect the raw AxiosError structure.
-    const serverMessage = error.response?.data?.message;
-    const message =
-      typeof serverMessage === "string"
-        ? serverMessage
-        : error.message || "Request failed";
+    const hasServerResponse = Boolean(error.response);
+    const message = hasServerResponse
+      ? error.response?.data?.message ||
+        error.response?.data?.error ||
+        error.message ||
+        "Something went wrong"
+      : error.message || "Network Error";
 
     const normalized = new Error(message);
     normalized.status = status;

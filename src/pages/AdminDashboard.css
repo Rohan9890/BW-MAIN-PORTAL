@@ -774,6 +774,7 @@
 
 .table-wrap {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .users-management-shell {
@@ -905,6 +906,8 @@
 .users-table-wrap {
   border: 1px solid #d7dce6;
   border-radius: 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .users-management-table th,
@@ -1216,6 +1219,8 @@
 .apps-table-wrap {
   border: 1px solid #d7dce6;
   border-radius: 4px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .apps-management-table th,
@@ -1360,6 +1365,8 @@
   border: 1px solid #d7dce6;
   border-radius: 10px;
   background: #fff;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .tickets-management-table th,
@@ -2203,6 +2210,62 @@ html[data-theme="dark"] .tickets-management-table tbody tr:hover {
   }
 }
 
+@media (max-width: 1024px) {
+  .admin-shell {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .admin-topbar {
+    padding: 14px;
+  }
+
+  .users-management-table,
+  .apps-management-table,
+  .tickets-management-table {
+    min-width: 680px;
+  }
+}
+
+@media (max-width: 768px) {
+  .admin-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-sidebar {
+    padding: 10px;
+  }
+
+  .admin-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-topbar {
+    padding: 12px;
+  }
+
+  .topbar-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .menu-group {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .stats-grid,
+  .users-metrics-grid,
+  .tickets-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .users-pagination-row {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
 @media (max-width: 760px) {
   .admin-shell {
     grid-template-columns: 1fr;
@@ -2270,5 +2333,34 @@ html[data-theme="dark"] .tickets-management-table tbody tr:hover {
   .ticket-detail-actions {
     display: grid;
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .admin-shell {
+    padding: 8px;
+    gap: 10px;
+  }
+
+  .admin-topbar h2 {
+    font-size: 16px;
+  }
+
+  .welcome-subtitle {
+    font-size: 11px;
+  }
+
+  .panel {
+    padding: 10px;
+  }
+
+  .dropdown-panel {
+    width: min(92vw, 300px);
+  }
+
+  .users-management-table,
+  .apps-management-table,
+  .tickets-management-table {
+    min-width: 620px;
   }
 }
