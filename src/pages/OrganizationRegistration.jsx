@@ -211,34 +211,18 @@ export default function OrganizationRegistration() {
       return;
     }
 
-    const selectedDocument = selectedFile || getSelectedDocument(formData);
-    if (!selectedDocument || !isFileLike(selectedDocument)) {
+    const selectedDocument = selectedFile;
+    if (!selectedDocument) {
       setSubmitError("Please upload document");
       return;
     }
 
-    const normalizedDocumentType = normalizeDocumentType(
-      documentType ||
-        formData.documentType ||
-        formData.docType ||
-        formData.idType,
-    );
-    if (
-      !normalizedDocumentType ||
-      !ALLOWED_DOCUMENT_TYPES.includes(normalizedDocumentType)
-    ) {
+    if (!documentType) {
       setSubmitError("Please select document type");
       return;
     }
 
-    const normalizedDocumentNumber = String(
-      documentNumber ||
-        formData.documentNumber ||
-        formData.idNumber ||
-        formData.documentNo ||
-        "",
-    ).trim();
-    if (!normalizedDocumentNumber) {
+    if (!documentNumber) {
       setSubmitError("Please enter document number");
       return;
     }
@@ -255,13 +239,18 @@ export default function OrganizationRegistration() {
 
     setSubmitting(true);
     try {
+      const type = "organization";
       const payload = new FormData();
       payload.append("file", selectedDocument);
-      payload.append("documentType", normalizedDocumentType);
-      payload.append("documentNumber", normalizedDocumentNumber);
+      payload.append("documentType", documentType);
+      payload.append("documentNumber", documentNumber);
+      payload.append(
+        "entityType",
+        type === "organization" ? "Organization" : "Individual",
+      );
       payload.append(
         "name",
-        String(formData.orgName || formData.contactName || ""),
+        formData.fullName || formData.orgName || formData.contactName || "",
       );
       payload.append("email", String(formData.email || ""));
       payload.append("phoneNumber", String(formData.phone || ""));
@@ -459,11 +448,10 @@ export default function OrganizationRegistration() {
                   className="input reg-premium-input"
                   accept="image/*,application/pdf"
                   onChange={(e) => {
-                    const file = e.target.files?.[0] || null;
-                    setSelectedFile(file);
+                    setSelectedFile(e.target.files[0]);
                     setFormData((prev) => ({
                       ...prev,
-                      selectedFile: file,
+                      selectedFile: e.target.files[0] || null,
                     }));
                   }}
                 />
