@@ -1,9 +1,11 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { getRegisteredUsers } from "../services/registrationStore";
 import { setLogoutHandler } from "../services/apiClient";
+import { clearAuth as clearAuthFromStorage } from "../services/fetchApi";
 
 const TOKEN_KEY = "ui-access-token";
 const USER_KEY = "ui-auth-user";
+const USER_ID_KEY = "userId";
 
 const AuthContext = createContext(null);
 
@@ -74,13 +76,15 @@ export function AuthProvider({ children }) {
     setLogoutHandler(logout);
   }, []);
 
-  const isAuthenticated = !!user;
+  const isAuthenticated = !!user && !!window.localStorage.getItem(TOKEN_KEY);
 
   const persistAuth = (nextUser) => {
-    // TODO: connect to backend API
-    // For now we simulate a token so the rest of the app can keep working.
-    const token = `mock-token-${Date.now().toString(36)}`;
-    window.localStorage.setItem(TOKEN_KEY, token);
+    const existingToken = window.localStorage.getItem(TOKEN_KEY);
+    if (!existingToken) {
+      // Keep non-backend mock login paths functional without overriding real tokens.
+      const token = `mock-token-${Date.now().toString(36)}`;
+      window.localStorage.setItem(TOKEN_KEY, token);
+    }
     writeUser(nextUser);
     setUser(nextUser);
   };
@@ -158,6 +162,8 @@ export function AuthProvider({ children }) {
   const logout = () => {
     window.localStorage.removeItem(TOKEN_KEY);
     window.localStorage.removeItem(USER_KEY);
+    window.localStorage.removeItem(USER_ID_KEY);
+    clearAuthFromStorage();
     setUser(null);
   };
 

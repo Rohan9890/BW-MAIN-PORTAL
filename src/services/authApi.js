@@ -2,6 +2,12 @@ import { apiClient } from "./apiClient";
 import { endpoints } from "./endpoints";
 import { safeServiceCall } from "./serviceUtils";
 import { upsertRegisteredUser } from "./registrationStore";
+import {
+  loginWithEmailPassword,
+  verifyOtpLogin,
+  registerUser,
+  clearAuth as clearAuthStorage,
+} from "./fetchApi";
 
 export const authApi = {
   /**
@@ -9,7 +15,15 @@ export const authApi = {
    * Payload shape: { name, email, phoneNumber, password, aadhaarNumber, panNumber }
    */
   async register(payload) {
-    return apiClient.post(endpoints.auth.register, payload);
+    try {
+      return await registerUser(payload);
+    } catch (error) {
+      throw {
+        message: error?.message || "Failed to register user",
+        status: error?.status,
+        originalError: error,
+      };
+    }
   },
 
   /**
@@ -17,7 +31,24 @@ export const authApi = {
    * Payload: { email, password }
    */
   async login(payload) {
-    return apiClient.post(endpoints.auth.login, payload);
+    try {
+      const res = await loginWithEmailPassword(payload.email, payload.password);
+
+      if (res?.message !== "OTP sent successfully") {
+        throw new Error(res?.message || "Unable to send OTP");
+      }
+
+      return {
+        success: true,
+        message: res.message,
+      };
+    } catch (error) {
+      throw {
+        message: error?.message || "Failed to send OTP",
+        status: error?.status,
+        originalError: error,
+      };
+    }
   },
 
   /**
@@ -25,7 +56,31 @@ export const authApi = {
    * Payload: { email, otp }
    */
   async verifyOtp({ email, otp }) {
-    return apiClient.post(endpoints.auth.verifyOtp, { email, otp });
+    try {
+      const res = await verifyOtpLogin(email, otp);
+
+      const token = res?.token || res?.data?.token;
+      const userId = res?.userId || res?.data?.userId;
+
+      if (!token || !userId) {
+        throw new Error("Invalid response: missing token or userId");
+      }
+
+      localStorage.setItem("ui-access-token", token);
+      localStorage.setItem("userId", userId);
+
+      return {
+        token,
+        userId,
+        success: true,
+      };
+    } catch (error) {
+      throw {
+        message: error?.message || "Failed to verify OTP",
+        status: error?.status,
+        originalError: error,
+      };
+    }
   },
 
   async registerIndividual(payload) {
@@ -56,6 +111,12 @@ export const authApi = {
     });
   },
 
+  /**
+   * Clear authentication data
+   */
+  clearAuth() {
+    clearAuthStorage();
+  },
   async registerOrganization(payload) {
     return safeServiceCall({
       request: () =>

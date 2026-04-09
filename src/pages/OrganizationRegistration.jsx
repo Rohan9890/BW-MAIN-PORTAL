@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Logo from "../components/Logo";
-import { authApi } from "../services";
 import "./Registration.css";
+
+const REGISTER_URL = "http://43.205.116.38:8080/api/v1.0/register";
 
 const ORG_FIELDS = [
   { name: "orgName", placeholder: "Organization Name", col: "left" },
@@ -31,6 +32,34 @@ function validatePhone(value) {
 
 function validatePassword(value) {
   return String(value || "").trim().length >= 6;
+}
+
+const ALLOWED_DOCUMENT_TYPES = ["PAN", "AADHAAR", "DL", "VOTER_ID"];
+
+function normalizeDocumentType(value) {
+  const raw = String(value || "")
+    .trim()
+    .toUpperCase();
+  if (!raw) return "";
+  if (raw === "AADHAR") return "AADHAAR";
+  if (raw === "VOTER ID") return "VOTER_ID";
+  return raw;
+}
+
+function getSelectedDocument(formData) {
+  if (formData?.selectedFile) return formData.selectedFile;
+  if (formData?.documentFile) return formData.documentFile;
+  if (formData?.file) return formData.file;
+  if (Array.isArray(formData?.documents) && formData.documents[0]) {
+    return formData.documents[0];
+  }
+  return null;
+}
+
+function isFileLike(value) {
+  const isFile = typeof File !== "undefined" && value instanceof File;
+  const isBlob = typeof Blob !== "undefined" && value instanceof Blob;
+  return isFile || isBlob;
 }
 
 function getFieldLabel(fieldName) {
@@ -64,6 +93,9 @@ function getFieldIcon(fieldName) {
 export default function OrganizationRegistration() {
   const navigate = useNavigate();
   const [formData, setFormData] = useState({});
+  const [documentType, setDocumentType] = useState("");
+  const [documentNumber, setDocumentNumber] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
   const [termsAccepted, setTermsAccepted] = useState(true);
   const [touched, setTouched] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -72,7 +104,11 @@ export default function OrganizationRegistration() {
 
   const sections = useMemo(
     () => [
-      { title: "Organization Info", subtitle: "Company identity.", fields: ["orgName"] },
+      {
+        title: "Organization Info",
+        subtitle: "Company identity.",
+        fields: ["orgName"],
+      },
       {
         title: "Contact Person",
         subtitle: "Primary contact details.",
@@ -92,8 +128,45 @@ export default function OrganizationRegistration() {
     [],
   );
 
+  useEffect(() => {
+    setDocumentType(
+      (prev) =>
+        prev ||
+        formData.documentType ||
+        formData.docType ||
+        formData.idType ||
+        "",
+    );
+    setDocumentNumber(
+      (prev) =>
+        prev ||
+        formData.documentNumber ||
+        formData.idNumber ||
+        formData.documentNo ||
+        "",
+    );
+    setSelectedFile(
+      (prev) =>
+        prev ||
+        formData.selectedFile ||
+        formData.documentFile ||
+        formData.file ||
+        (Array.isArray(formData.documents)
+          ? formData.documents[0] || null
+          : null),
+    );
+  }, [formData]);
+
   const requiredFields = useMemo(
-    () => ["orgName", "contactName", "email", "password", "billing", "phone", "shipping"],
+    () => [
+      "orgName",
+      "contactName",
+      "email",
+      "password",
+      "billing",
+      "phone",
+      "shipping",
+    ],
     [],
   );
 
@@ -105,17 +178,22 @@ export default function OrganizationRegistration() {
         errors[name] = `${getFieldLabel(name)} is required.`;
         return;
       }
-      if (name === "email" && !validateEmail(value)) errors[name] = "Enter a valid email address.";
-      if (name === "phone" && !validatePhone(value)) errors[name] = "Enter a valid phone number.";
-      if (name === "password" && !validatePassword(value)) errors[name] = "Password must be at least 6 characters.";
+      if (name === "email" && !validateEmail(value))
+        errors[name] = "Enter a valid email address.";
+      if (name === "phone" && !validatePhone(value))
+        errors[name] = "Enter a valid phone number.";
+      if (name === "password" && !validatePassword(value))
+        errors[name] = "Password must be at least 6 characters.";
     });
     return errors;
   }, [formData, requiredFields]);
 
-  const canSubmit = !submitting && termsAccepted && Object.keys(draftErrors).length === 0;
+  const canSubmit =
+    !submitting && termsAccepted && Object.keys(draftErrors).length === 0;
 
   const getPlaceholder = (fieldName) =>
-    ORG_FIELDS.find((f) => f.name === fieldName)?.placeholder || getFieldLabel(fieldName);
+    ORG_FIELDS.find((f) => f.name === fieldName)?.placeholder ||
+    getFieldLabel(fieldName);
 
   const handleSave = async () => {
     setSubmitError("");
@@ -133,14 +211,81 @@ export default function OrganizationRegistration() {
       return;
     }
 
+    const selectedDocument = selectedFile || getSelectedDocument(formData);
+    if (!selectedDocument || !isFileLike(selectedDocument)) {
+      setSubmitError("Please upload document");
+      return;
+    }
+
+    const normalizedDocumentType = normalizeDocumentType(
+      documentType ||
+        formData.documentType ||
+        formData.docType ||
+        formData.idType,
+    );
+    if (
+      !normalizedDocumentType ||
+      !ALLOWED_DOCUMENT_TYPES.includes(normalizedDocumentType)
+    ) {
+      setSubmitError("Please select document type");
+      return;
+    }
+
+    const normalizedDocumentNumber = String(
+      documentNumber ||
+        formData.documentNumber ||
+        formData.idNumber ||
+        formData.documentNo ||
+        "",
+    ).trim();
+    if (!normalizedDocumentNumber) {
+      setSubmitError("Please enter document number");
+      return;
+    }
+
+    const fileType = String(selectedDocument?.type || "").toLowerCase();
+    if (
+      fileType &&
+      !fileType.startsWith("image/") &&
+      fileType !== "application/pdf"
+    ) {
+      setSubmitError("Please upload a valid image or PDF document");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      // TODO: connect to backend API
-      await authApi.registerOrganization(formData);
+      const payload = new FormData();
+      payload.append("file", selectedDocument);
+      payload.append("documentType", normalizedDocumentType);
+      payload.append("documentNumber", normalizedDocumentNumber);
+      payload.append(
+        "name",
+        String(formData.orgName || formData.contactName || ""),
+      );
+      payload.append("email", String(formData.email || ""));
+      payload.append("phoneNumber", String(formData.phone || ""));
+      payload.append("password", String(formData.password || ""));
+
+      const response = await fetch(REGISTER_URL, {
+        method: "POST",
+        body: payload,
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result?.message || "Registration failed");
+      }
+
       setSubmitSuccess("Registration submitted successfully.");
+      setDocumentType("");
+      setDocumentNumber("");
+      setSelectedFile(null);
       setTimeout(() => navigate("/login"), 850);
     } catch (e) {
-      setSubmitError(e?.message || "Unable to submit registration. Please try again.");
+      setSubmitError(
+        e?.message || "Unable to submit registration. Please try again.",
+      );
     } finally {
       setSubmitting(false);
     }
@@ -159,10 +304,16 @@ export default function OrganizationRegistration() {
         </header>
 
         <h1 className="reg-title">Organization Registration Page</h1>
-        <p className="reg-subtitle">Enter your details to create a new account.</p>
+        <p className="reg-subtitle">
+          Enter your details to create a new account.
+        </p>
 
         <div className="reg-tabs">
-          <button type="button" className="reg-tab" onClick={() => navigate("/register")}>
+          <button
+            type="button"
+            className="reg-tab"
+            onClick={() => navigate("/register")}
+          >
             <span className="tab-icon">👤</span>
             Individual Registration
           </button>
@@ -190,7 +341,9 @@ export default function OrganizationRegistration() {
 
                 return (
                   <div key={fieldName} className="reg-input-block">
-                    <label className="reg-label">{getFieldLabel(fieldName)}</label>
+                    <label className="reg-label">
+                      {getFieldLabel(fieldName)}
+                    </label>
                     <div
                       className={`reg-input-with-icon ${
                         showError ? "reg-input-invalid" : ""
@@ -200,7 +353,11 @@ export default function OrganizationRegistration() {
                         {getFieldIcon(fieldName)}
                       </span>
                       <input
-                        type={fieldName.toLowerCase().includes("password") ? "password" : "text"}
+                        type={
+                          fieldName.toLowerCase().includes("password")
+                            ? "password"
+                            : "text"
+                        }
                         className="input reg-premium-input"
                         placeholder={getPlaceholder(fieldName)}
                         value={value}
@@ -210,10 +367,14 @@ export default function OrganizationRegistration() {
                             [fieldName]: e.target.value,
                           }))
                         }
-                        onBlur={() => setTouched((prev) => ({ ...prev, [fieldName]: true }))}
+                        onBlur={() =>
+                          setTouched((prev) => ({ ...prev, [fieldName]: true }))
+                        }
                       />
                     </div>
-                    {showError && <div className="reg-field-error">{error}</div>}
+                    {showError && (
+                      <div className="reg-field-error">{error}</div>
+                    )}
                   </div>
                 );
               })}
@@ -226,15 +387,104 @@ export default function OrganizationRegistration() {
           <div className="kyc-cloud">☁</div>
           <p className="kyc-label">UPLOAD ID PROOF</p>
           <p className="kyc-hint">Company Registration</p>
+          <div className="reg-section-grid">
+            <div className="reg-input-block">
+              <label className="reg-label" htmlFor="organization-document-type">
+                Document Type
+              </label>
+              <div className="reg-input-with-icon">
+                <span className="reg-input-icon" aria-hidden>
+                  🪪
+                </span>
+                <select
+                  id="organization-document-type"
+                  className="input reg-premium-input"
+                  value={documentType}
+                  onChange={(e) => {
+                    setDocumentType(e.target.value);
+                    setFormData((prev) => ({
+                      ...prev,
+                      documentType: e.target.value,
+                    }));
+                  }}
+                >
+                  <option value="">Select Document Type</option>
+                  <option value="PAN">PAN</option>
+                  <option value="AADHAAR">Aadhaar</option>
+                  <option value="DL">Driving License</option>
+                  <option value="VOTER_ID">Voter ID</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="reg-input-block">
+              <label
+                className="reg-label"
+                htmlFor="organization-document-number"
+              >
+                Document Number
+              </label>
+              <div className="reg-input-with-icon">
+                <span className="reg-input-icon" aria-hidden>
+                  #
+                </span>
+                <input
+                  id="organization-document-number"
+                  type="text"
+                  className="input reg-premium-input"
+                  placeholder="Enter Document Number"
+                  value={documentNumber}
+                  onChange={(e) => {
+                    setDocumentNumber(e.target.value);
+                    setFormData((prev) => ({
+                      ...prev,
+                      documentNumber: e.target.value,
+                    }));
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="reg-input-block">
+              <label className="reg-label" htmlFor="organization-document-file">
+                Document Upload
+              </label>
+              <div className="reg-input-with-icon">
+                <span className="reg-input-icon" aria-hidden>
+                  📎
+                </span>
+                <input
+                  id="organization-document-file"
+                  type="file"
+                  className="input reg-premium-input"
+                  accept="image/*,application/pdf"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setSelectedFile(file);
+                    setFormData((prev) => ({
+                      ...prev,
+                      selectedFile: file,
+                    }));
+                  }}
+                />
+              </div>
+            </div>
+          </div>
         </div>
 
         <label className="checkbox-label reg-terms">
-          <input type="checkbox" checked={termsAccepted} onChange={(e) => setTermsAccepted(e.target.checked)} />
+          <input
+            type="checkbox"
+            checked={termsAccepted}
+            onChange={(e) => setTermsAccepted(e.target.checked)}
+          />
           <span>I agree to the Terms & Conditions</span>
         </label>
 
         {submitError && <div className="reg-submit-error">{submitError}</div>}
-        {submitSuccess && <div className="reg-submit-success">{submitSuccess}</div>}
+        {submitSuccess && (
+          <div className="reg-submit-success">{submitSuccess}</div>
+        )}
 
         <button
           type="button"

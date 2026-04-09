@@ -1,4 +1,4 @@
-import { Routes, Route } from "react-router-dom";
+import { Navigate, Routes, Route } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 
 import DashboardLayout from "./Layouts/DashboardLayout";
@@ -41,14 +41,15 @@ export default function App() {
         <Route path="/dashboard" element={<UserDashboard />} />
         <Route path="/support/chat" element={<ChatSupport />} />
         <Route path="/support/ticket" element={<RaiseTicket />} />
-        <Route path="/" element={<DashboardLayout />}>
-          <Route index element={<Home />} />
-          <Route path="all-apps" element={<AllApps />} />
-          <Route path="my-apps" element={<MyApps />} />
-          <Route path="favorites" element={<Favorites />} />
-          <Route path="profile" element={<Profile />} />
-          <Route path="settings" element={<Settings />} />
-          <Route path="activity" element={<Activity />} />
+        <Route path="/" element={<Navigate to="/login" replace />} />
+        <Route element={<DashboardLayout />}>
+          <Route path="/home" element={<Home />} />
+          <Route path="/all-apps" element={<AllApps />} />
+          <Route path="/my-apps" element={<MyApps />} />
+          <Route path="/favorites" element={<Favorites />} />
+          <Route path="/profile" element={<Profile />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/activity" element={<Activity />} />
         </Route>
       </Routes>
     </>

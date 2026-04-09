@@ -1,9 +1,10 @@
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Logo from "../components/Logo";
-import { authApi } from "../services";
 import { showSuccess, showError } from "../services/toast";
 import "./Registration.css";
+
+const REGISTER_URL = "http://43.205.116.38:8080/api/v1.0/register";
 
 const INDIVIDUAL_FIELDS = [
   { name: "fullName", placeholder: "Full Name", col: "left" },
@@ -125,6 +126,34 @@ function validatePassword(value) {
   return String(value || "").trim().length >= 6;
 }
 
+const ALLOWED_DOCUMENT_TYPES = ["PAN", "AADHAAR", "DL", "VOTER_ID"];
+
+function normalizeDocumentType(value) {
+  const raw = String(value || "")
+    .trim()
+    .toUpperCase();
+  if (!raw) return "";
+  if (raw === "AADHAR") return "AADHAAR";
+  if (raw === "VOTER ID") return "VOTER_ID";
+  return raw;
+}
+
+function getSelectedDocument(formData) {
+  if (formData?.selectedFile) return formData.selectedFile;
+  if (formData?.documentFile) return formData.documentFile;
+  if (formData?.file) return formData.file;
+  if (Array.isArray(formData?.documents) && formData.documents[0]) {
+    return formData.documents[0];
+  }
+  return null;
+}
+
+function isFileLike(value) {
+  const isFile = typeof File !== "undefined" && value instanceof File;
+  const isBlob = typeof Blob !== "undefined" && value instanceof Blob;
+  return isFile || isBlob;
+}
+
 function getFieldMeta(config, fieldName) {
   return config.fields.find((f) => f.name === fieldName) || null;
 }
@@ -174,6 +203,9 @@ export default function Registration() {
   );
   const [type, setType] = useState(initial);
   const [formData, setFormData] = useState({});
+  const [documentType, setDocumentType] = useState("");
+  const [documentNumber, setDocumentNumber] = useState("");
+  const [selectedFile, setSelectedFile] = useState(null);
   const [termsAccepted, setTermsAccepted] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState("");
@@ -182,11 +214,43 @@ export default function Registration() {
 
   const config = REG_TYPES[type] ?? REG_TYPES.individual;
 
+  useEffect(() => {
+    setDocumentType(
+      (prev) =>
+        prev ||
+        formData.documentType ||
+        formData.docType ||
+        formData.idType ||
+        "",
+    );
+    setDocumentNumber(
+      (prev) =>
+        prev ||
+        formData.documentNumber ||
+        formData.idNumber ||
+        formData.documentNo ||
+        "",
+    );
+    setSelectedFile(
+      (prev) =>
+        prev ||
+        formData.selectedFile ||
+        formData.documentFile ||
+        formData.file ||
+        (Array.isArray(formData.documents)
+          ? formData.documents[0] || null
+          : null),
+    );
+  }, [formData]);
+
   const onTypeChange = (nextType) => {
     const normalized =
       nextType === "organization" ? "organization" : "individual";
     setType(normalized);
     setFormData({});
+    setDocumentType("");
+    setDocumentNumber("");
+    setSelectedFile(null);
     setTouched({});
     setSubmitError("");
     setSubmitSuccess("");
@@ -236,23 +300,80 @@ export default function Registration() {
       return;
     }
 
+    const selectedDocument = selectedFile || getSelectedDocument(formData);
+    if (!selectedDocument || !isFileLike(selectedDocument)) {
+      setSubmitError("Please upload document");
+      return;
+    }
+
+    const normalizedDocumentType = normalizeDocumentType(
+      documentType ||
+        formData.documentType ||
+        formData.docType ||
+        formData.idType,
+    );
+    if (
+      !normalizedDocumentType ||
+      !ALLOWED_DOCUMENT_TYPES.includes(normalizedDocumentType)
+    ) {
+      setSubmitError("Please select document type");
+      return;
+    }
+
+    const normalizedDocumentNumber = String(
+      documentNumber ||
+        formData.documentNumber ||
+        formData.idNumber ||
+        formData.documentNo ||
+        "",
+    ).trim();
+    if (!normalizedDocumentNumber) {
+      setSubmitError("Please enter document number");
+      return;
+    }
+
+    const fileType = String(selectedDocument?.type || "").toLowerCase();
+    if (
+      fileType &&
+      !fileType.startsWith("image/") &&
+      fileType !== "application/pdf"
+    ) {
+      setSubmitError("Please upload a valid image or PDF document");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const payload = {
-        name:
+      const payload = new FormData();
+      payload.append("file", selectedDocument);
+      payload.append("documentType", normalizedDocumentType);
+      payload.append("documentNumber", normalizedDocumentNumber);
+      payload.append(
+        "name",
+        String(
           formData.fullName || formData.orgName || formData.contactName || "",
-        email: formData.email || "",
-        phoneNumber: formData.phone || "",
-        password: formData.password || "",
-        aadhaarNumber: formData.aadhaarNumber || undefined,
-        panNumber: formData.panNumber || undefined,
-      };
+        ),
+      );
+      payload.append("email", String(formData.email || ""));
+      payload.append("phoneNumber", String(formData.phone || ""));
+      payload.append("password", String(formData.password || ""));
 
-      await authApi.register(payload);
+      const response = await fetch(REGISTER_URL, {
+        method: "POST",
+        body: payload,
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result?.message || "Registration failed");
+      }
 
       showSuccess("Registration successful");
       setSubmitSuccess("Registration submitted successfully.");
       setFormData({});
+      setDocumentType("");
+      setDocumentNumber("");
+      setSelectedFile(null);
       setTouched({});
       setTimeout(() => navigate("/login"), 1200);
     } catch (e) {
@@ -369,6 +490,86 @@ export default function Registration() {
           <div className="kyc-cloud">☁</div>
           <p className="kyc-label">UPLOAD ID PROOF</p>
           <p className="kyc-hint">{config.kycHint}</p>
+          <div className="reg-section-grid">
+            <div className="reg-input-block">
+              <label className="reg-label" htmlFor="document-type">
+                Document Type
+              </label>
+              <div className="reg-input-with-icon">
+                <span className="reg-input-icon" aria-hidden>
+                  🪪
+                </span>
+                <select
+                  id="document-type"
+                  className="input reg-premium-input"
+                  value={documentType}
+                  onChange={(e) => {
+                    setDocumentType(e.target.value);
+                    setFormData((prev) => ({
+                      ...prev,
+                      documentType: e.target.value,
+                    }));
+                  }}
+                >
+                  <option value="">Select Document Type</option>
+                  <option value="PAN">PAN</option>
+                  <option value="AADHAAR">Aadhaar</option>
+                  <option value="DL">Driving License</option>
+                  <option value="VOTER_ID">Voter ID</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="reg-input-block">
+              <label className="reg-label" htmlFor="document-number">
+                Document Number
+              </label>
+              <div className="reg-input-with-icon">
+                <span className="reg-input-icon" aria-hidden>
+                  #
+                </span>
+                <input
+                  id="document-number"
+                  type="text"
+                  className="input reg-premium-input"
+                  placeholder="Enter Document Number"
+                  value={documentNumber}
+                  onChange={(e) => {
+                    setDocumentNumber(e.target.value);
+                    setFormData((prev) => ({
+                      ...prev,
+                      documentNumber: e.target.value,
+                    }));
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="reg-input-block">
+              <label className="reg-label" htmlFor="document-file">
+                Document Upload
+              </label>
+              <div className="reg-input-with-icon">
+                <span className="reg-input-icon" aria-hidden>
+                  📎
+                </span>
+                <input
+                  id="document-file"
+                  type="file"
+                  className="input reg-premium-input"
+                  accept="image/*,application/pdf"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0] || null;
+                    setSelectedFile(file);
+                    setFormData((prev) => ({
+                      ...prev,
+                      selectedFile: file,
+                    }));
+                  }}
+                />
+              </div>
+            </div>
+          </div>
         </div>
 
         <label className="checkbox-label reg-terms">

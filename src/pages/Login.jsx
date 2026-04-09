@@ -139,6 +139,8 @@ export default function Login() {
         response?.token || response?.accessToken || response?.data?.token || "";
       await loginWithEmail({ email: storedEmail, role });
       if (token) localStorage.setItem("ui-access-token", token);
+      const userId = response?.userId || response?.user?.id;
+      if (userId) localStorage.setItem("userId", userId);
       localStorage.removeItem("login_pending_email");
       showSuccess("Login successful");
       showSuccessAndNavigate(role);
