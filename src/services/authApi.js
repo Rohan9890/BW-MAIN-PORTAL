@@ -1,7 +1,3 @@
-import { apiClient } from "./apiClient";
-import { endpoints } from "./endpoints";
-import { safeServiceCall } from "./serviceUtils";
-import { upsertRegisteredUser } from "./registrationStore";
 import {
   loginWithEmailPassword,
   verifyOtpLogin,
@@ -10,139 +6,61 @@ import {
 } from "./fetchApi";
 
 export const authApi = {
-  /**
-   * Register a new user via the production backend.
-   * Payload shape: { name, email, phoneNumber, password, aadhaarNumber, panNumber }
-   */
-  async register(payload) {
+  // ================= REGISTER =================
+  async register(formData) {
     try {
-      return await registerUser(payload);
+      // ✅ MUST BE FORMDATA
+      return await registerUser(formData);
     } catch (error) {
       throw {
-        message: error?.message || "Failed to register user",
+        message: error?.message || "Registration failed",
         status: error?.status,
-        originalError: error,
       };
     }
   },
 
-  /**
-   * Trigger OTP generation — backend does NOT return a token here.
-   * Payload: { email, password }
-   */
-  async login(payload) {
+  // ================= LOGIN (SEND OTP) =================
+  async login({ email, password }) {
     try {
-      const res = await loginWithEmailPassword(payload.email, payload.password);
-
-      if (res?.message !== "OTP sent successfully") {
-        throw new Error(res?.message || "Unable to send OTP");
-      }
+      const res = await loginWithEmailPassword(email, password);
 
       return {
         success: true,
-        message: res.message,
+        message: res?.message || "OTP sent",
       };
     } catch (error) {
-      throw {
-        message: error?.message || "Failed to send OTP",
-        status: error?.status,
-        originalError: error,
-      };
+      let msg = error?.message || "Login failed";
+
+      if (msg.toLowerCase().includes("verify")) {
+        msg = "Please verify your email first";
+      }
+
+      throw { message: msg };
     }
   },
 
-  /**
-   * Verify OTP after login — backend returns the JWT token here.
-   * Payload: { email, otp }
-   */
+  // ================= VERIFY OTP =================
   async verifyOtp({ email, otp }) {
     try {
       const res = await verifyOtpLogin(email, otp);
 
-      const token = res?.token || res?.data?.token;
-      const userId = res?.userId || res?.data?.userId;
+      const token = res?.accessToken || res?.token || res?.data?.token || "";
 
-      if (!token || !userId) {
-        throw new Error("Invalid response: missing token or userId");
-      }
+      const userId = res?.userId || res?.data?.userId || "";
+
+      if (!token) throw new Error("Token missing");
 
       localStorage.setItem("ui-access-token", token);
-      localStorage.setItem("userId", userId);
+      if (userId) localStorage.setItem("userId", userId);
 
-      return {
-        token,
-        userId,
-        success: true,
-      };
+      return { token, userId };
     } catch (error) {
-      throw {
-        message: error?.message || "Failed to verify OTP",
-        status: error?.status,
-        originalError: error,
-      };
+      throw { message: error?.message || "OTP verification failed" };
     }
   },
 
-  async registerIndividual(payload) {
-    return safeServiceCall({
-      request: () => apiClient.post(endpoints.auth.registerIndividual, payload),
-      fallback: (() => {
-        // TODO: connect to backend API
-        const normalizedEmail = String(payload?.email || "")
-          .trim()
-          .toLowerCase();
-        const nextUser = {
-          id: `USR-${Date.now().toString().slice(-6)}`,
-          name: payload?.fullName || "New User",
-          email: normalizedEmail,
-          role: "User",
-          joinedOn: "Today",
-          status: "Active",
-          isActive: true,
-          phone: payload?.phone || "",
-        };
-        upsertRegisteredUser(nextUser);
-        return {
-          success: true,
-          message: "Individual registration submitted",
-          user: nextUser,
-        };
-      })(),
-    });
-  },
-
-  /**
-   * Clear authentication data
-   */
+  // ================= CLEAR =================
   clearAuth() {
     clearAuthStorage();
-  },
-  async registerOrganization(payload) {
-    return safeServiceCall({
-      request: () =>
-        apiClient.post(endpoints.auth.registerOrganization, payload),
-      fallback: {
-        ...(function () {
-          // TODO: connect to backend API
-          const normalizedEmail = String(payload?.email || "")
-            .trim()
-            .toLowerCase();
-          const nextUser = {
-            id: `USR-${Date.now().toString().slice(-6)}`,
-            name: payload?.orgName || "New Organization",
-            email: normalizedEmail,
-            role: "User",
-            joinedOn: "Today",
-            status: "Active",
-            isActive: true,
-            phone: payload?.phone || "",
-          };
-          upsertRegisteredUser(nextUser);
-          return { user: nextUser };
-        })(),
-        success: true,
-        message: "Organization registration submitted",
-      },
-    });
   },
 };

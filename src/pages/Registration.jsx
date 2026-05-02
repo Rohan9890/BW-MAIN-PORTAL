@@ -3,28 +3,25 @@ import { useEffect, useMemo, useState } from "react";
 import Logo from "../components/Logo";
 import { showSuccess, showError } from "../services/toast";
 import "./Registration.css";
+import { buildApiRequestUrl } from "../services/apiConfig";
 
-const REGISTER_URL = "http://43.205.116.38:8080/api/v1.0/register";
+const REGISTER_URL = buildApiRequestUrl("/register");
 
 const INDIVIDUAL_FIELDS = [
   { name: "fullName", placeholder: "Full Name", col: "left" },
   { name: "email", placeholder: "Email Address", col: "right" },
   { name: "password", placeholder: "Password", col: "left" },
   { name: "phone", placeholder: "Phone Number", col: "right" },
-  { name: "city", placeholder: "City", col: "left" },
-  { name: "zip", placeholder: "ZIP Code", col: "right" },
-  { name: "street", placeholder: "Street Address", col: "left" },
+  { name: "address", placeholder: "Address", col: "left" },
   { name: "referral", placeholder: "Referral Code / Name", col: "right" },
 ];
 
 const ORG_FIELDS = [
   { name: "orgName", placeholder: "Organization Name", col: "left" },
-  { name: "contactName", placeholder: "Contact Person Name", col: "right" },
-  { name: "email", placeholder: "Email Address", col: "left" },
-  { name: "password", placeholder: "Password", col: "right" },
-  { name: "billing", placeholder: "Billing Address", col: "left" },
+  { name: "email", placeholder: "Email Address", col: "right" },
+  { name: "password", placeholder: "Password", col: "left" },
   { name: "phone", placeholder: "Phone Number", col: "right" },
-  { name: "shipping", placeholder: "Multiple shipping Address", col: "left" },
+  { name: "address", placeholder: "Address", col: "left" },
   { name: "referral", placeholder: "Referral Code / Name", col: "right" },
 ];
 
@@ -33,72 +30,41 @@ const REG_TYPES = {
     label: "Individual Registration",
     title: "Individual Registration Page",
     fields: INDIVIDUAL_FIELDS,
-    kycHint: "Addhar card, Passport, vote id.",
+    kycHint: "Aadhaar Card, PAN Card",
     icon: "👤",
     sections: [
       {
         title: "Personal Info",
         subtitle: "Your identity basics.",
-        fields: ["fullName"],
-      },
-      {
-        title: "Contact Details",
-        subtitle: "Where we can reach you.",
-        fields: ["email", "phone", "city", "zip", "street"],
+        fields: ["fullName", "email", "phone"],
       },
       {
         title: "Account Setup",
         subtitle: "Create your credentials.",
-        fields: ["password", "referral"],
+        fields: ["password", "address", "referral"],
       },
     ],
-    requiredFields: [
-      "fullName",
-      "email",
-      "password",
-      "phone",
-      "city",
-      "zip",
-      "street",
-    ],
+    requiredFields: ["fullName", "email", "password", "phone", "address"],
   },
   organization: {
     label: "Organization Registration",
     title: "Organization Registration Page",
     fields: ORG_FIELDS,
-    kycHint: "Company Registration",
+    kycHint: "Aadhaar Card, PAN Card",
     icon: "💼",
     sections: [
       {
         title: "Organization Info",
         subtitle: "Company identity.",
-        fields: ["orgName"],
-      },
-      {
-        title: "Contact Person",
-        subtitle: "Primary contact details.",
-        fields: ["contactName", "email", "phone"],
-      },
-      {
-        title: "Address / Details",
-        subtitle: "Billing and shipping details.",
-        fields: ["billing", "shipping"],
+        fields: ["orgName", "email", "phone"],
       },
       {
         title: "Account Setup",
         subtitle: "Create your credentials.",
-        fields: ["password", "referral"],
+        fields: ["password", "address", "referral"],
       },
     ],
-    requiredFields: [
-      "orgName",
-      "contactName",
-      "email",
-      "password",
-      "billing",
-      "phone",
-      "shipping",
-    ],
+    requiredFields: ["orgName", "email", "password", "phone", "address"],
   },
 };
 
@@ -126,7 +92,7 @@ function validatePassword(value) {
   return String(value || "").trim().length >= 6;
 }
 
-const ALLOWED_DOCUMENT_TYPES = ["PAN", "AADHAAR", "DL", "VOTER_ID"];
+const ALLOWED_DOCUMENT_TYPES = ["PAN", "AADHAAR"];
 
 function normalizeDocumentType(value) {
   const raw = String(value || "")
@@ -164,14 +130,9 @@ function getFieldLabel(fieldName) {
     email: "Email Address",
     password: "Password",
     phone: "Phone Number",
-    city: "City",
-    zip: "ZIP Code",
-    street: "Street Address",
+    address: "Address",
     referral: "Referral Code / Name",
     orgName: "Organization Name",
-    contactName: "Contact Person Name",
-    billing: "Billing Address",
-    shipping: "Shipping Address",
   };
   return map[fieldName] || fieldName;
 }
@@ -182,14 +143,9 @@ function getFieldIcon(fieldName) {
     email: "✉️",
     password: "🔒",
     phone: "☎️",
-    city: "📍",
-    zip: "🏷️",
-    street: "🏠",
+    address: "🏠",
     referral: "🎟️",
     orgName: "🏢",
-    contactName: "👤",
-    billing: "🧾",
-    shipping: "📦",
   };
   return map[fieldName] || "•";
 }
@@ -213,6 +169,14 @@ export default function Registration() {
   const [touched, setTouched] = useState({});
 
   const config = REG_TYPES[type] ?? REG_TYPES.individual;
+
+  // Auto-fill referral code from URL ?ref= param
+  useEffect(() => {
+    const ref = new URLSearchParams(window.location.search).get("ref");
+    if (ref) {
+      setFormData((prev) => ({ ...prev, referral: ref }));
+    }
+  }, []);
 
   useEffect(() => {
     setDocumentType(
@@ -287,6 +251,7 @@ export default function Registration() {
   const handleSave = async () => {
     setSubmitError("");
     setSubmitSuccess("");
+
     setTouched((prev) => {
       const all = {};
       config.requiredFields.forEach((f) => {
@@ -300,8 +265,7 @@ export default function Registration() {
       return;
     }
 
-    const selectedDocument = selectedFile;
-    if (!selectedDocument) {
+    if (!selectedFile) {
       setSubmitError("Please upload document");
       return;
     }
@@ -316,54 +280,93 @@ export default function Registration() {
       return;
     }
 
-    const fileType = String(selectedDocument?.type || "").toLowerCase();
+    if (documentType === "AADHAAR" && !/^\d{12}$/.test(documentNumber)) {
+      setSubmitError("Aadhaar must be 12 digits");
+      return;
+    }
+
     if (
-      fileType &&
-      !fileType.startsWith("image/") &&
-      fileType !== "application/pdf"
+      documentType === "PAN" &&
+      !/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(documentNumber)
     ) {
-      setSubmitError("Please upload a valid image or PDF document");
+      setSubmitError("Invalid PAN format (ABCDE1234F)");
+      return;
+    }
+
+    const entityType = type === "organization" ? "ADMIN" : "INDIVIDUAL";
+
+    const mappedName =
+      type === "organization" ? formData.orgName : formData.fullName;
+
+    if (!mappedName || !mappedName.trim()) {
+      setSubmitError("Name is required");
       return;
     }
 
     setSubmitting(true);
+
     try {
       const payload = new FormData();
-      payload.append("file", selectedDocument);
+
+      payload.append("file", selectedFile);
       payload.append("documentType", documentType);
       payload.append("documentNumber", documentNumber);
-      payload.append(
-        "entityType",
-        type === "organization" ? "Organization" : "Individual",
-      );
-      payload.append(
-        "name",
-        formData.fullName || formData.orgName || formData.contactName || "",
-      );
-      payload.append("email", String(formData.email || ""));
-      payload.append("phoneNumber", String(formData.phone || ""));
-      payload.append("password", String(formData.password || ""));
+      payload.append("entityType", entityType);
+      payload.append("name", mappedName.trim());
+      payload.append("email", formData.email);
+      payload.append("phoneNumber", formData.phone);
+      payload.append("password", formData.password);
+      payload.append("address", formData.address);
+
+      if (formData.referral) {
+        payload.append("referralCode", formData.referral);
+      }
+
+      // Debug payload
+      for (const pair of payload.entries()) {
+        console.log(pair[0], pair[1]);
+      }
 
       const response = await fetch(REGISTER_URL, {
         method: "POST",
         body: payload,
+        credentials: "include",
       });
 
-      const result = await response.json().catch(() => ({}));
+      const text = await response.text();
+      console.log("BACKEND RESPONSE:", text);
+
+      let result;
+      try {
+        result = text ? JSON.parse(text) : {};
+      } catch {
+        result = text;
+      }
+
       if (!response.ok) {
-        throw new Error(result?.message || "Registration failed");
+        throw new Error(
+          typeof result === "string"
+            ? result
+            : result?.message || "Registration failed",
+        );
       }
 
       showSuccess("Registration successful");
-      setSubmitSuccess("Registration submitted successfully.");
+
+      setSubmitSuccess(
+        "Verification email sent. Please check your inbox.",
+      );
+
       setFormData({});
       setDocumentType("");
       setDocumentNumber("");
       setSelectedFile(null);
       setTouched({});
-      setTimeout(() => navigate("/login"), 1200);
+
+      setTimeout(() => navigate("/login"), 3000);
     } catch (e) {
       const msg = e?.message || "Registration failed";
+      console.error("FINAL ERROR:", msg);
       showError(msg);
       setSubmitError(msg);
     } finally {
@@ -372,177 +375,193 @@ export default function Registration() {
   };
 
   return (
-    <div className="page-gradient registration-page">
-      <div className="card-container registration-card">
-        <header className="reg-header">
-          <Logo to="/" />
-          <Link to="/login">
-            <button type="button" className="btn btn-primary">
-              Login
-            </button>
-          </Link>
-        </header>
+    <div className="registration-page">
+      {/* Left Branding Panel */}
+      <aside className="reg-left-panel">
+        <div className="reg-left-top">
+          <Logo to="/" showText />
+        </div>
+        <div className="reg-left-middle">
+          <h1 className="reg-left-title">{config.title}</h1>
+          <p className="reg-left-desc">
+            Create your account and unlock premium features.
+          </p>
+        </div>
+        <div className="reg-left-bottom">
+          <p className="reg-left-login">
+            Already have an account?{" "}
+            <Link to="/login" className="reg-left-link">
+              Sign In
+            </Link>
+          </p>
+        </div>
+      </aside>
 
-        <h1 className="reg-title">{config.title}</h1>
-        <p className="reg-subtitle">
-          Enter your details to create a new account.
-        </p>
-
-        <div className="reg-switch">
-          <label className="reg-switch-label" htmlFor="regType">
-            Registration Type
-          </label>
-          <div className="reg-switch-control">
-            <span className="reg-switch-icon" aria-hidden="true">
-              {config.icon}
-            </span>
-            <select
-              id="regType"
-              className="reg-switch-select"
-              value={type}
-              onChange={(e) => onTypeChange(e.target.value)}
-            >
-              <option value="individual">Individual Registration</option>
-              <option value="organization">Organization Registration</option>
-            </select>
-          </div>
+      {/* Right Form Panel */}
+      <main className="reg-right-panel">
+        <div className="reg-right-header">
+          <h2 className="reg-right-title">Create your account</h2>
+          <p className="reg-right-sub">Fill in your details to get started.</p>
         </div>
 
-        <div className="reg-form-title">Create your account</div>
-
-        {config.sections.map((section) => (
-          <div key={section.title} className="reg-section-card">
-            <div className="reg-section-head">
-              <div>
-                <h3 className="reg-section-title">{section.title}</h3>
-                <p className="reg-section-sub">{section.subtitle}</p>
-              </div>
-            </div>
-
-            <div className="reg-section-grid">
-              {section.fields.map((fieldName) => {
-                const meta = getFieldMeta(config, fieldName);
-                const value = formData[fieldName] || "";
-                const error = touched[fieldName] ? draftErrors[fieldName] : "";
-                const showError = !!error;
-
-                return (
-                  <div key={fieldName} className="reg-input-block">
-                    <label className="reg-label">
-                      {getFieldLabel(fieldName)}
-                    </label>
-                    <div
-                      className={`reg-input-with-icon ${
-                        showError ? "reg-input-invalid" : ""
-                      }`}
-                    >
-                      <span className="reg-input-icon" aria-hidden>
-                        {getFieldIcon(fieldName)}
-                      </span>
-                      <input
-                        type={
-                          fieldName.toLowerCase().includes("password")
-                            ? "password"
-                            : "text"
-                        }
-                        className="input reg-premium-input"
-                        placeholder={
-                          meta?.placeholder || getFieldLabel(fieldName)
-                        }
-                        value={value}
-                        onChange={(e) =>
-                          setFormData((prev) => ({
-                            ...prev,
-                            [fieldName]: e.target.value,
-                          }))
-                        }
-                        onBlur={() =>
-                          setTouched((prev) => ({ ...prev, [fieldName]: true }))
-                        }
-                      />
-                    </div>
-                    {showError && (
-                      <div className="reg-field-error">{error}</div>
-                    )}
-                  </div>
-                );
-              })}
+        <div className="reg-step-content">
+          <div className="reg-switch">
+            <label className="reg-switch-label" htmlFor="regType">
+              Registration Type
+            </label>
+            <div className="reg-switch-control">
+              <span className="reg-switch-icon" aria-hidden="true">
+                {config.icon}
+              </span>
+              <select
+                id="regType"
+                className="reg-switch-select"
+                value={type}
+                onChange={(e) => onTypeChange(e.target.value)}
+              >
+                <option value="individual">Individual</option>
+                <option value="organization">Organization</option>
+              </select>
             </div>
           </div>
-        ))}
 
-        <h3 className="kyc-title">KYC DOCUMENTS UPLOAD</h3>
-        <div className="kyc-upload">
-          <div className="kyc-cloud">☁</div>
-          <p className="kyc-label">UPLOAD ID PROOF</p>
-          <p className="kyc-hint">{config.kycHint}</p>
-          <div className="reg-section-grid">
-            <div className="reg-input-block">
-              <label className="reg-label" htmlFor="document-type">
-                Document Type
-              </label>
-              <div className="reg-input-with-icon">
-                <span className="reg-input-icon" aria-hidden>
-                  🪪
-                </span>
-                <select
-                  id="document-type"
-                  className="input reg-premium-input"
-                  value={documentType}
-                  onChange={(e) => {
-                    setDocumentType(e.target.value);
-                    setFormData((prev) => ({
-                      ...prev,
-                      documentType: e.target.value,
-                    }));
-                  }}
-                >
-                  <option value="">Select Document Type</option>
-                  <option value="PAN">PAN</option>
-                  <option value="AADHAAR">Aadhaar</option>
-                  <option value="DL">Driving License</option>
-                  <option value="VOTER_ID">Voter ID</option>
-                </select>
+          {config.sections.map((section) => (
+            <div key={section.title} className="reg-section-compact">
+              <h4 className="reg-section-label">{section.title}</h4>
+              <div className="reg-section-grid">
+                {section.fields.map((fieldName) => {
+                  const meta = getFieldMeta(config, fieldName);
+                  const value = formData[fieldName] || "";
+                  const error = touched[fieldName]
+                    ? draftErrors[fieldName]
+                    : "";
+                  const hasError = !!error;
+
+                  return (
+                    <div key={fieldName} className="reg-input-block">
+                      <label className="reg-label">
+                        {getFieldLabel(fieldName)}
+                      </label>
+                      <div
+                        className={`reg-input-with-icon ${hasError ? "reg-input-invalid" : ""}`}
+                      >
+                        <span className="reg-input-icon" aria-hidden>
+                          {getFieldIcon(fieldName)}
+                        </span>
+                        <input
+                          type={
+                            fieldName.toLowerCase().includes("password")
+                              ? "password"
+                              : "text"
+                          }
+                          className="input reg-premium-input"
+                          placeholder={
+                            meta?.placeholder || getFieldLabel(fieldName)
+                          }
+                          value={value}
+                          onChange={(e) =>
+                            setFormData((prev) => ({
+                              ...prev,
+                              [fieldName]: e.target.value,
+                            }))
+                          }
+                          onBlur={() =>
+                            setTouched((prev) => ({
+                              ...prev,
+                              [fieldName]: true,
+                            }))
+                          }
+                        />
+                      </div>
+                      {hasError && (
+                        <div className="reg-field-error">{error}</div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
+          <div className="kyc-upload-card">
+            <div className="kyc-card-header">
+              <span className="kyc-shield">🛡️</span>
+              <div>
+                <h3 className="kyc-card-title">KYC Document Upload</h3>
+                <p className="kyc-card-hint">{config.kycHint}</p>
+              </div>
+            </div>
+            <div className="reg-section-grid">
+              <div className="reg-input-block">
+                <label className="reg-label" htmlFor="document-type">
+                  Document Type
+                </label>
+                <div className="reg-input-with-icon">
+                  <span className="reg-input-icon" aria-hidden>
+                    🪪
+                  </span>
+                  <select
+                    id="document-type"
+                    className="input reg-premium-input"
+                    value={documentType}
+                    onChange={(e) => {
+                      setDocumentType(e.target.value);
+                      setFormData((prev) => ({
+                        ...prev,
+                        documentType: e.target.value,
+                      }));
+                    }}
+                  >
+                    <option value="">Select Document Type</option>
+                    <option value="PAN">PAN Card</option>
+                    <option value="AADHAAR">Aadhaar Card</option>
+                    <option value="DL">Driving License</option>
+                    <option value="VOTER_ID">Voter ID</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="reg-input-block">
+                <label className="reg-label" htmlFor="document-number">
+                  Document Number
+                </label>
+                <div className="reg-input-with-icon">
+                  <span className="reg-input-icon" aria-hidden>
+                    #
+                  </span>
+                  <input
+                    id="document-number"
+                    type="text"
+                    className="input reg-premium-input"
+                    placeholder="Enter Document Number"
+                    value={documentNumber}
+                    onChange={(e) => {
+                      setDocumentNumber(e.target.value.toUpperCase());
+                      setFormData((prev) => ({
+                        ...prev,
+                        documentNumber: e.target.value.toUpperCase(),
+                      }));
+                    }}
+                  />
+                </div>
               </div>
             </div>
 
-            <div className="reg-input-block">
-              <label className="reg-label" htmlFor="document-number">
-                Document Number
-              </label>
-              <div className="reg-input-with-icon">
-                <span className="reg-input-icon" aria-hidden>
-                  #
+            <div className="reg-file-drop-wrapper">
+              <label className="reg-file-drop" htmlFor="document-file">
+                <span className="reg-file-icon">
+                  {selectedFile ? "📄" : "☁️"}
                 </span>
-                <input
-                  id="document-number"
-                  type="text"
-                  className="input reg-premium-input"
-                  placeholder="Enter Document Number"
-                  value={documentNumber}
-                  onChange={(e) => {
-                    setDocumentNumber(e.target.value);
-                    setFormData((prev) => ({
-                      ...prev,
-                      documentNumber: e.target.value,
-                    }));
-                  }}
-                />
-              </div>
-            </div>
-
-            <div className="reg-input-block">
-              <label className="reg-label" htmlFor="document-file">
-                Document Upload
-              </label>
-              <div className="reg-input-with-icon">
-                <span className="reg-input-icon" aria-hidden>
-                  📎
+                <span className="reg-file-text">
+                  {selectedFile
+                    ? selectedFile.name
+                    : "Click to upload or drag & drop"}
                 </span>
+                <span className="reg-file-hint">Images or PDF, max 5MB</span>
                 <input
                   id="document-file"
                   type="file"
-                  className="input reg-premium-input"
+                  className="reg-file-input"
                   accept="image/*,application/pdf"
                   onChange={(e) => {
                     setSelectedFile(e.target.files[0]);
@@ -552,41 +571,41 @@ export default function Registration() {
                     }));
                   }}
                 />
-              </div>
+              </label>
             </div>
           </div>
-        </div>
 
-        <label className="checkbox-label reg-terms">
-          <input
-            type="checkbox"
-            checked={termsAccepted}
-            onChange={(e) => setTermsAccepted(e.target.checked)}
-          />
-          <span>I agree to the Terms & Conditions</span>
-        </label>
+          <label className="checkbox-label reg-terms">
+            <input
+              type="checkbox"
+              checked={termsAccepted}
+              onChange={(e) => setTermsAccepted(e.target.checked)}
+            />
+            <span>I agree to the Terms & Conditions</span>
+          </label>
 
-        {submitError && <div className="reg-submit-error">{submitError}</div>}
-        {submitSuccess && (
-          <div className="reg-submit-success">{submitSuccess}</div>
-        )}
-
-        <button
-          type="button"
-          className="btn btn-primary btn-save reg-submit-btn"
-          onClick={handleSave}
-          disabled={!canSubmit}
-        >
-          {submitting ? (
-            <>
-              <span className="reg-btn-spinner" aria-hidden />
-              Submitting...
-            </>
-          ) : (
-            "SAVE"
+          {submitError && <div className="reg-submit-error">{submitError}</div>}
+          {submitSuccess && (
+            <div className="reg-submit-success">{submitSuccess}</div>
           )}
-        </button>
-      </div>
+
+          <button
+            type="button"
+            className="btn btn-primary reg-submit-btn"
+            onClick={handleSave}
+            disabled={!canSubmit}
+          >
+            {submitting ? (
+              <>
+                <span className="reg-btn-spinner" aria-hidden />
+                Submitting...
+              </>
+            ) : (
+              "Register"
+            )}
+          </button>
+        </div>
+      </main>
     </div>
   );
 }

@@ -1,4 +1,6 @@
 import axios from "axios";
+import { getApiBaseRoot, logDevApiTransport } from "./apiConfig";
+import { isPublicAuthPath, isAuthFlowAppPath, urlIncludesVerifyOtp } from "./authPaths";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 const TOKEN_KEY = "ui-access-token";
@@ -20,9 +22,24 @@ export function setLogoutHandler(fn) {
   _logoutHandler = fn;
 }
 
+const PROFILE_CACHE_KEY = "ui-profile";
+
+/**
+ * Full client logout for 401 from non-axios callers (e.g. `apiFetch`).
+ * Clears storage keys used by AuthContext, then invokes the registered handler.
+ */
+export function forceLogoutClient() {
+  window.localStorage.removeItem(TOKEN_KEY);
+  window.localStorage.removeItem("userId");
+  window.localStorage.removeItem(PROFILE_CACHE_KEY);
+  if (typeof _logoutHandler === "function") {
+    _logoutHandler();
+  }
+}
+
 // ── Axios instance ──────────────────────────────────────────────────────────
 const axiosInstance = axios.create({
-  baseURL: (import.meta.env.VITE_API_URL || "").replace(/\/$/, ""),
+  baseURL: getApiBaseRoot(),
   timeout: REQUEST_TIMEOUT_MS,
   headers: {
     Accept: "application/json",
@@ -30,13 +47,44 @@ const axiosInstance = axios.create({
   },
 });
 
-// ── Request interceptor: attach JWT ─────────────────────────────────────────
+// ── Request interceptor: attach JWT + mirror fetch credentials rules ──────────
 axiosInstance.interceptors.request.use(
   (config) => {
-    const token = window.localStorage.getItem(TOKEN_KEY);
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
+    const rawTok = window.localStorage.getItem(TOKEN_KEY);
+    const token =
+      typeof rawTok === "string" ? rawTok.trim() : "";
+    if (
+      typeof rawTok === "string" &&
+      rawTok !== token &&
+      token
+    ) {
+      window.localStorage.setItem(TOKEN_KEY, token);
     }
+    const rawUrl = config.url || "";
+    const base = config.baseURL || "";
+    const combined = `${base}${rawUrl}`;
+    const authSafe = isPublicAuthPath(rawUrl) || isPublicAuthPath(combined);
+    const attachAuth = Boolean(token && !authSafe);
+
+    if (attachAuth) {
+      config.headers.Authorization = `Bearer ${token}`;
+    } else {
+      delete config.headers.Authorization;
+    }
+
+    /** Same as `apiFetch`: Bearer → no cookies; public auth → `include` for session cookies. */
+    config.withCredentials = !attachAuth;
+
+    if (import.meta.env.DEV) {
+      const finalUrl = axios.getUri(config);
+      logDevApiTransport({
+        source: "axios",
+        finalUrl,
+        credentialsMode: config.withCredentials ? "include" : "omit",
+        authorizationHeader: config.headers.Authorization,
+      });
+    }
+
     return config;
   },
   (error) => Promise.reject(error),
@@ -50,12 +98,23 @@ axiosInstance.interceptors.response.use(
   (error) => {
     const status = error.response?.status ?? null;
 
-    // 401 Unauthorized → token is expired or invalid; force logout.
-    if (status === 401) {
-      window.localStorage.removeItem(TOKEN_KEY);
-      if (typeof _logoutHandler === "function") {
-        _logoutHandler();
-      }
+    const combinedUrl = `${error.config?.baseURL || ""}${error.config?.url || ""}`;
+    const skip401Logout =
+      urlIncludesVerifyOtp(combinedUrl) ||
+      urlIncludesVerifyOtp(error.config?.url || "") ||
+      isPublicAuthPath(error.config?.url || "") ||
+      isPublicAuthPath(combinedUrl) ||
+      (typeof window !== "undefined" && isAuthFlowAppPath(window.location.pathname));
+
+    /**
+     * Match `apiFetch`: delayed logout on protected routes so Network / logs stay usable;
+     * skip on auth flows and verify-otp.
+     */
+    if (status === 401 && !skip401Logout) {
+      setTimeout(() => {
+        forceLogoutClient();
+        window.location.href = "/login";
+      }, 2000);
     }
 
     // Normalize to a plain Error with a predictable shape so callers don't

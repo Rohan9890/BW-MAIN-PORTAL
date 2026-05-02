@@ -198,6 +198,7 @@ export default function PlansPricing() {
             <button
               type="button"
               className="btn btn-primary btn-contact-support"
+              onClick={() => window.location.assign("/support/chat")}
             >
               Contact Support
             </button>

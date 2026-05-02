@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBrand } from "../context/BrandContext";
+import { getGreetingFirstName, useAuth } from "../context/AuthContext";
+import { applicationBackend, notificationsBackend } from "../services/backendApis";
+import {
+  extractNotificationList,
+  resolveNotificationNav,
+} from "../services/notificationUtils";
 import { dashboardApi } from "../services";
+import { PageEmpty, PageError, PageLoading } from "../components/PageStates";
 
 function StatusPill({ status }) {
   if (!status) return null;
@@ -10,6 +17,8 @@ function StatusPill({ status }) {
     Open: { bg: "#dbeafe", fg: "#1d4ed8" },
     Failed: { bg: "#fee2e2", fg: "#dc2626" },
     Paid: { bg: "#dcfce7", fg: "#15803d" },
+    Pending: { bg: "#fef3c7", fg: "#92400e" },
+    Active: { bg: "#dcfce7", fg: "#15803d" },
   };
 
   const color = map[status] || { bg: "#f1f5f9", fg: "#475569" };
@@ -33,13 +42,51 @@ function StatusPill({ status }) {
   );
 }
 
+function TxnStatusPill({ tone, label }) {
+  const styles = {
+    success: { bg: "#dcfce7", fg: "#15803d", border: "#86efac" },
+    danger: { bg: "#fee2e2", fg: "#dc2626", border: "#fecaca" },
+    warning: { bg: "#fef3c7", fg: "#b45309", border: "#fde68a" },
+    neutral: { bg: "#f1f5f9", fg: "#475569", border: "#e2e8f0" },
+  };
+  const s = styles[tone] || styles.neutral;
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 700,
+        padding: "4px 10px",
+        borderRadius: 999,
+        background: s.bg,
+        color: s.fg,
+        border: `1px solid ${s.border}`,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function greetingPrefix() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
 export default function Home() {
   const { brand, defaultBrand } = useBrand();
+  const { profile, initializing } = useAuth();
+  const greetingDevLogOnce = useRef(false);
   const navigate = useNavigate();
+  const chartGradId = useId().replace(/:/g, "");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [homeData, setHomeData] = useState({});
+  const [notifPreview, setNotifPreview] = useState([]);
+  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -48,10 +95,16 @@ export default function Home() {
       setLoading(true);
       setError("");
       try {
-        const response = await dashboardApi.getHomeData();
+        const [response, notifPage] = await Promise.all([
+          dashboardApi.getHomeData(),
+          notificationsBackend.list({ page: 0, size: 6 }).catch(() => null),
+        ]);
         if (!isMounted) return;
 
         setHomeData(response || {});
+        const list = extractNotificationList(notifPage);
+        setNotifPreview(list.slice(0, 4));
+        setUnreadNotifCount(list.filter((n) => !(n.read ?? n.isRead)).length);
       } catch (serviceError) {
         if (!isMounted) return;
         setError(serviceError?.message || "Unable to load dashboard.");
@@ -69,6 +122,13 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!import.meta.env.DEV || greetingDevLogOnce.current) return;
+    if (initializing) return;
+    greetingDevLogOnce.current = true;
+    console.log("Greeting profile:", profile);
+  }, [profile, initializing]);
+
   const stats = Array.isArray(homeData.stats) ? homeData.stats : [];
   const transactions = Array.isArray(homeData.transactions)
     ? homeData.transactions
@@ -84,29 +144,67 @@ export default function Home() {
     ? homeData.usageBreakdown
     : [];
 
-  if (loading) {
-    return (
-      <div style={{ padding: 20, textAlign: "center", color: "#64748b" }}>
-        Loading dashboard...
-      </div>
-    );
-  }
+  const chartSeries = homeData.chartSeries || {
+    labels: [],
+    linePoints: "",
+    areaPoints: "",
+    totalHits: 0,
+    counts: [],
+    maxCount: 1,
+  };
 
-  if (error) {
-    return (
-      <div style={{ padding: 20, textAlign: "center", color: "#b91c1c" }}>
-        {error}
-      </div>
-    );
-  }
+  const greetingFirstToken = useMemo(
+    () => getGreetingFirstName(profile),
+    [profile],
+  );
+  const showGreetingNameSkeleton = initializing && !greetingFirstToken;
+  const displayFirstName = greetingFirstToken || "there";
 
-  if (!stats.length && !apps.length && !transactions.length) {
-    return (
-      <div style={{ padding: 20, textAlign: "center", color: "#64748b" }}>
-        No dashboard data available.
-      </div>
-    );
-  }
+  const handleOpenCatalogApp = (app) => {
+    const url = String(app?.appUrl || "").trim();
+    const id = app?.appId;
+    if (!url) {
+      navigate("/all-apps");
+      return;
+    }
+    window.open(url, "_blank", "noopener,noreferrer");
+    if (id) applicationBackend.open(id).catch(() => {});
+  };
+
+  const handleNotifRowClick = async (n) => {
+    if (n?.id) {
+      try {
+        await notificationsBackend.markRead(n.id);
+        setUnreadNotifCount((c) => Math.max(0, Number(c) - 1));
+        setNotifPreview((prev) =>
+          prev.map((x) => (x.id === n.id ? { ...x, read: true, isRead: true } : x)),
+        );
+      } catch {
+        // ignore
+      }
+    }
+    const target = resolveNotificationNav(n);
+    if (target && /^https?:\/\//i.test(target)) {
+      window.open(target, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (target && String(target).startsWith("/")) {
+      navigate(target);
+      return;
+    }
+    navigate("/activity");
+  };
+
+  const notifRows = useMemo(
+    () =>
+      (Array.isArray(notifPreview) ? notifPreview : []).map((n) => ({
+        id: n.id,
+        text: n.title || n.message || n.text || "Notification",
+        time: n.createdAt ? new Date(n.createdAt).toLocaleString() : "",
+        read: Boolean(n.read),
+      })),
+    [notifPreview],
+  );
 
   const filteredApps = useMemo(() => {
     if (!search.trim()) return apps;
@@ -149,10 +247,12 @@ export default function Home() {
 
     const transactionResults = transactions
       .filter((item) =>
-        `${item.id} ${item.status}`.toLowerCase().includes(query),
+        `${item.id} ${item.status} ${item.rowKey || ""}`
+          .toLowerCase()
+          .includes(query),
       )
       .map((item) => ({
-        key: `transaction-${item.id}`,
+        key: `transaction-${item.rowKey || item.id}`,
         title: item.id,
         subtitle: `${item.amount} • ${item.status}`,
         type: "Invoice",
@@ -162,6 +262,23 @@ export default function Home() {
 
     return [...appResults, ...actionResults, ...transactionResults].slice(0, 6);
   }, [search, apps, recommendedActions, transactions]);
+
+  if (loading) {
+    return <PageLoading title="Loading dashboard..." />;
+  }
+
+  if (error) {
+    return <PageError message={error} onRetry={() => window.location.reload()} />;
+  }
+
+  if (!stats.length && !apps.length && !transactions.length) {
+    return (
+      <PageEmpty
+        title="No dashboard data available."
+        subtitle="Try refreshing in a moment."
+      />
+    );
+  }
 
   const handleSearchSubmit = (event) => {
     if (event.key !== "Enter") return;
@@ -179,6 +296,10 @@ export default function Home() {
   return (
     <div style={{ width: "100%", display: "grid", gap: 14 }}>
       <style>{`
+        @keyframes home-greet-pulse {
+          0% { background-position: 100% 0; }
+          100% { background-position: -100% 0; }
+        }
         .home-card {
           background: #ffffff;
           border: 1px solid rgba(37, 99, 235, 0.08);
@@ -317,14 +438,48 @@ export default function Home() {
               fontSize: 26,
               lineHeight: 1.1,
               fontWeight: 800,
-              background: "linear-gradient(135deg, #0f172a 0%, #1e40af 100%)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
               letterSpacing: "-0.5px",
+              color: "#0f172a",
             }}
           >
-            Good Morning, Rohan
+            <span
+              style={{
+                background: "linear-gradient(135deg, #0f172a 0%, #1e40af 100%)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+              }}
+            >
+              {greetingPrefix()},
+            </span>{" "}
+            {showGreetingNameSkeleton ? (
+              <span
+                aria-hidden
+                style={{
+                  display: "inline-block",
+                  verticalAlign: "middle",
+                  height: 22,
+                  width: 120,
+                  borderRadius: 8,
+                  backgroundColor: "#e2e8f0",
+                  backgroundImage:
+                    "linear-gradient(90deg, #e2e8f0 0%, #f8fafc 45%, #e2e8f0 90%)",
+                  backgroundSize: "200% 100%",
+                  animation: "home-greet-pulse 1.2s ease-in-out infinite",
+                }}
+              />
+            ) : (
+              <span
+                style={{
+                  background: "linear-gradient(135deg, #0f172a 0%, #1e40af 100%)",
+                  WebkitBackgroundClip: "text",
+                  WebkitTextFillColor: "transparent",
+                  backgroundClip: "text",
+                }}
+              >
+                {displayFirstName}
+              </span>
+            )}
           </h1>
           <p
             style={{
@@ -591,7 +746,7 @@ export default function Home() {
                 borderRadius: 20,
               }}
             >
-              Last 7 Days
+              Last 7 days · from transactions
             </span>
           </div>
 
@@ -600,10 +755,10 @@ export default function Home() {
             height="140"
             viewBox="0 0 320 140"
             role="img"
-            aria-label="Usage chart"
+            aria-label="Transactions per day"
           >
             <defs>
-              <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+              <linearGradient id={chartGradId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.2" />
                 <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
               </linearGradient>
@@ -641,17 +796,11 @@ export default function Home() {
               strokeWidth="1"
             />
             <polyline
-              fill="none"
-              stroke="#bfdbfe"
-              strokeWidth="2.5"
-              strokeLinejoin="round"
-              strokeLinecap="round"
-              points="0,115 53,108 106,84 159,76 212,68 265,38 320,20"
-            />
-            <polyline
-              fill="url(#areaGrad)"
+              fill={`url(#${chartGradId})`}
               stroke="none"
-              points="0,115 53,110 106,100 159,106 212,94 265,78 320,68 320,120 0,120"
+              points={
+                chartSeries.areaPoints || "10,110 310,110 310,120 10,120"
+              }
             />
             <polyline
               fill="none"
@@ -659,33 +808,29 @@ export default function Home() {
               strokeWidth="2.5"
               strokeLinejoin="round"
               strokeLinecap="round"
-              points="0,115 53,110 106,100 159,106 212,94 265,78 320,68"
-            />
-            <circle
-              cx="320"
-              cy="68"
-              r="5"
-              fill="#2563eb"
-              stroke="#fff"
-              strokeWidth="2"
+              points={
+                chartSeries.linePoints || "10,110 310,110"
+              }
             />
           </svg>
 
           <div
             style={{
               display: "grid",
-              gridTemplateColumns: "repeat(6,1fr)",
+              gridTemplateColumns: `repeat(${Math.max(chartSeries.labels?.length || 7, 1)}, minmax(0, 1fr))`,
               color: "#94a3b8",
               fontSize: 10,
               fontWeight: 500,
               textAlign: "center",
+              gap: 4,
             }}
           >
-            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-              .slice(0, 6)
-              .map((d) => (
-                <span key={d}>{d}</span>
-              ))}
+            {(chartSeries.labels?.length
+              ? chartSeries.labels
+              : ["—", "—", "—", "—", "—", "—", "—"]
+            ).map((d, i) => (
+              <span key={`${d}-${i}`}>{d}</span>
+            ))}
           </div>
 
           <div
@@ -708,14 +853,15 @@ export default function Home() {
                   width: 8,
                   height: 8,
                   borderRadius: "50%",
-                  background: "#22c55e",
+                  background: "#2563eb",
                   display: "inline-block",
                 }}
               />
-              <span>Currently Active</span>
+              <span>Daily volume</span>
             </div>
             <span style={{ fontWeight: 700, color: "#2563eb", fontSize: 11 }}>
-              18 Sessions, 2 API Calls
+              {chartSeries.totalHits ?? 0} txn
+              {(chartSeries.totalHits ?? 0) === 1 ? "" : "s"} · 7d window
             </span>
           </div>
 
@@ -784,21 +930,26 @@ export default function Home() {
             >
               Transaction History
             </h3>
-            <span
+            <button
+              type="button"
+              onClick={() => navigate("/activity")}
               style={{
                 fontSize: 11,
                 color: "#2563eb",
                 fontWeight: 600,
                 cursor: "pointer",
+                background: "none",
+                border: "none",
+                padding: 0,
               }}
             >
               View all
-            </span>
+            </button>
           </div>
           <div style={{ display: "grid", gap: 14 }}>
             {transactions.map((t) => (
               <div
-                key={t.id}
+                key={t.rowKey || t.id}
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
@@ -853,7 +1004,15 @@ export default function Home() {
                     </p>
                   </div>
                 </div>
-                <div style={{ textAlign: "right" }}>
+                <div
+                  style={{
+                    textAlign: "right",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "flex-end",
+                    gap: 6,
+                  }}
+                >
                   <p
                     style={{
                       margin: 0,
@@ -864,16 +1023,7 @@ export default function Home() {
                   >
                     {t.amount}
                   </p>
-                  <p
-                    style={{
-                      margin: "2px 0 0",
-                      color: t.status === "Failed" ? "#dc2626" : "#15803d",
-                      fontWeight: 600,
-                      fontSize: 11,
-                    }}
-                  >
-                    {t.status}
-                  </p>
+                  <TxnStatusPill tone={t.tone} label={t.status} />
                 </div>
               </div>
             ))}
@@ -935,8 +1085,9 @@ export default function Home() {
             </div>
           </div>
           <button
+            type="button"
             className="action-btn"
-            onClick={() => alert("Start KYC clicked")}
+            onClick={() => navigate("/profile")}
           >
             Start Verification
           </button>
@@ -1027,7 +1178,8 @@ export default function Home() {
               </h3>
             </div>
             <button
-              onClick={() => alert("View all updates")}
+              type="button"
+              onClick={() => navigate("/activity")}
               style={{
                 border: "1.5px solid #bfdbfe",
                 borderRadius: 10,
@@ -1100,18 +1252,23 @@ export default function Home() {
                 fontWeight: 700,
               }}
             >
-              Recently Accessed Apps
+              Apps from catalog
             </h3>
-            <span
+            <button
+              type="button"
+              onClick={() => navigate("/all-apps")}
               style={{
                 fontSize: 12,
                 color: "#2563eb",
                 fontWeight: 600,
                 cursor: "pointer",
+                background: "none",
+                border: "none",
+                padding: 0,
               }}
             >
               View all
-            </span>
+            </button>
           </div>
           <div
             className="apps-grid"
@@ -1124,7 +1281,7 @@ export default function Home() {
           >
             {filteredApps.map((app, index) => (
               <div
-                key={`${app.name}-${index}`}
+                key={`${app.appId ?? app.name}-${index}`}
                 style={{
                   border: "1px solid #e8eef8",
                   background: "linear-gradient(135deg, #f8fbff, #ffffff)",
@@ -1175,8 +1332,9 @@ export default function Home() {
                   </div>
                 </div>
                 <button
+                  type="button"
                   className="open-btn"
-                  onClick={() => alert(`Opening ${app.name}`)}
+                  onClick={() => handleOpenCatalogApp(app)}
                 >
                   Open
                 </button>
@@ -1309,18 +1467,37 @@ export default function Home() {
             >
               Recent Activity
             </h3>
-            <span
-              style={{
-                color: "#94a3b8",
-                fontSize: 11,
-                background: "#f1f5f9",
-                padding: "2px 8px",
-                borderRadius: 20,
-                fontWeight: 500,
-              }}
+            <div
+              style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}
             >
-              Last 7d
-            </span>
+              <span
+                style={{
+                  color: "#94a3b8",
+                  fontSize: 11,
+                  background: "#f1f5f9",
+                  padding: "2px 8px",
+                  borderRadius: 20,
+                  fontWeight: 500,
+                }}
+              >
+                Last 7d
+              </span>
+              <button
+                type="button"
+                onClick={() => navigate("/activity")}
+                style={{
+                  fontSize: 11,
+                  color: "#2563eb",
+                  fontWeight: 600,
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                }}
+              >
+                View all
+              </button>
+            </div>
           </div>
           <div style={{ display: "grid", gap: 10 }}>
             {recentRight.map((item) => (
@@ -1365,9 +1542,131 @@ export default function Home() {
         </div>
 
         <div
-          className="home-card right-col"
-          style={{ gridColumn: 5, padding: 20 }}
+          style={{
+            gridColumn: 5,
+            display: "grid",
+            gap: 12,
+            alignContent: "start",
+          }}
         >
+          <div className="home-card right-col" style={{ padding: 20 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 12,
+                gap: 8,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 8,
+                    background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                    <path
+                      d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"
+                      fill="#fff"
+                    />
+                  </svg>
+                </div>
+                <h3
+                  style={{
+                    margin: 0,
+                    color: "#0f172a",
+                    fontSize: 14,
+                    fontWeight: 700,
+                  }}
+                >
+                  Notifications
+                </h3>
+              </div>
+              {unreadNotifCount > 0 ? (
+                <span
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 800,
+                    color: "#fff",
+                    background: "#dc2626",
+                    borderRadius: 999,
+                    padding: "2px 8px",
+                    lineHeight: 1.2,
+                  }}
+                >
+                  {unreadNotifCount > 99 ? "99+" : unreadNotifCount}
+                </span>
+              ) : null}
+            </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              {notifRows.length ? (
+                notifRows.map((n) => (
+                  <button
+                    key={String(n.id)}
+                    type="button"
+                    onClick={() => handleNotifRowClick({ id: n.id })}
+                    style={{
+                      textAlign: "left",
+                      border: "1px solid #f1f5f9",
+                      borderRadius: 10,
+                      background: n.read ? "#fafafa" : "#f0f6ff",
+                      padding: "8px 10px",
+                      cursor: "pointer",
+                      display: "grid",
+                      gap: 4,
+                      transition: "background 0.15s",
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 12,
+                        fontWeight: 700,
+                        color: "#0f172a",
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {n.text}
+                    </span>
+                    {n.time ? (
+                      <span style={{ fontSize: 10, color: "#94a3b8" }}>
+                        {n.time}
+                      </span>
+                    ) : null}
+                  </button>
+                ))
+              ) : (
+                <p style={{ margin: 0, fontSize: 12, color: "#94a3b8" }}>
+                  You&apos;re all caught up.
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => navigate("/activity")}
+                style={{
+                  marginTop: 4,
+                  fontSize: 11,
+                  color: "#2563eb",
+                  fontWeight: 700,
+                  background: "none",
+                  border: "none",
+                  padding: 0,
+                  cursor: "pointer",
+                  textAlign: "left",
+                }}
+              >
+                View all activity
+              </button>
+            </div>
+          </div>
+
+          <div className="home-card right-col" style={{ padding: 20 }}>
           <div
             style={{
               display: "flex",
@@ -1407,7 +1706,8 @@ export default function Home() {
           </div>
           <div style={{ display: "grid", gap: 8 }}>
             <button
-              onClick={() => alert("Chat with support clicked")}
+              type="button"
+              onClick={() => navigate("/support/chat")}
               style={{
                 border: "1.5px solid #e8eef8",
                 borderRadius: 12,
@@ -1462,7 +1762,8 @@ export default function Home() {
               </svg>
             </button>
             <button
-              onClick={() => alert("Raise a ticket clicked")}
+              type="button"
+              onClick={() => navigate("/support/ticket")}
               style={{
                 border: "1.5px solid #e8eef8",
                 borderRadius: 12,
@@ -1554,6 +1855,7 @@ export default function Home() {
                 LIVE
               </span>
             </div>
+          </div>
           </div>
         </div>
       </section>

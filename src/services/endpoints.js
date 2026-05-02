@@ -1,8 +1,8 @@
 export const endpoints = {
   auth: {
-    login: "/api/v1.0/login",
-    verifyOtp: "/api/v1.0/login/verify-otp",
-    register: "/api/v1.0/register",
+    login: "/login",
+    verifyOtp: "/verify-otp",
+    register: "/register",
     registerIndividual: "/auth/register/individual",
     registerOrganization: "/auth/register/organization",
   },
@@ -39,7 +39,9 @@ export const endpoints = {
     all: "/tickets",
     byId: (id) => `/tickets/${id}`,
     create: "/tickets",
-    updateStatus: (id) => `/tickets/${id}/status`,
+    /** PUT body e.g. { status } */
+    update: (id) => `/tickets/${id}`,
+    updateStatus: (id) => `/tickets/${id}`,
     reply: (id) => `/tickets/${id}/reply`,
   },
   profile: {

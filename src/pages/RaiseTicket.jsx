@@ -1,346 +1,203 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useBrand } from "../context/BrandContext";
-import "./RaiseTicket.css";
-
-// TODO: connect to backend API
-const createTicket = async (payload) => {
-  // Replace with: const res = await fetch("/api/support/tickets", { method: "POST", body: JSON.stringify(payload) });
-  // return await res.json();
-  const ticketId = `TKT-${Date.now().toString().slice(-6)}`;
-  return { ok: true, ticketId, payload };
-};
-
-const CATEGORIES = ["Billing", "Technical", "Account", "General"];
-const PRIORITIES = ["Low", "Medium", "High"];
-
-const PRIORITY_COLORS = {
-  Low: { bg: "#dcfce7", color: "#15803d" },
-  Medium: { bg: "#fef3c7", color: "#d97706" },
-  High: { bg: "#fee2e2", color: "#dc2626" },
-};
-
-const EMPTY_FORM = {
-  subject: "",
-  category: "",
-  priority: "",
-  description: "",
-  file: null,
-};
+import { ticketsBackend } from "../services/backendApis";
+import { showError, showSuccess } from "../services/toast";
 
 export default function RaiseTicket() {
   const navigate = useNavigate();
-  const { brand, defaultBrand } = useBrand();
-  const companyName = brand?.name || defaultBrand?.name || "Bold and Wise";
-  const logoUrl = brand?.logoUrl || defaultBrand?.logoUrl || "/logo.png";
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [form, setForm] = useState({ subject: "", message: "" });
+  const [fieldErrors, setFieldErrors] = useState({});
 
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [errors, setErrors] = useState({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [success, setSuccess] = useState(null); // { ticketId }
+  const canSubmit = useMemo(() => {
+    if (loading) return false;
+    if (String(form.subject || "").trim().length < 4) return false;
+    if (String(form.message || "").trim().length < 10) return false;
+    return true;
+  }, [form, loading]);
 
-  // ── Handlers ────────────────────────────────────────────────────────────────
-
-  function handleChange(field, value) {
-    setForm((prev) => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors((prev) => ({ ...prev, [field]: "" }));
-    }
-  }
-
-  function handleFileChange(e) {
-    const file = e.target.files[0] || null;
-    setForm((prev) => ({ ...prev, file }));
-  }
-
-  function validate() {
+  const submit = async () => {
+    if (loading) return;
+    setError("");
+    const subject = String(form.subject || "").trim();
+    const message = String(form.message || "").trim();
     const errs = {};
-    if (!form.subject.trim()) errs.subject = "Subject is required.";
-    if (!form.category) errs.category = "Please select a category.";
-    if (!form.priority) errs.priority = "Please select a priority.";
-    if (!form.description.trim()) errs.description = "Description is required.";
-    else if (form.description.trim().length < 20)
-      errs.description = "Description must be at least 20 characters.";
-    return errs;
-  }
+    if (subject.length < 4) errs.subject = "Subject is required (min 4 characters).";
+    if (message.length < 10) errs.message = "Message is required (min 10 characters).";
+    setFieldErrors(errs);
+    if (Object.keys(errs).length) return;
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const errs = validate();
-    if (Object.keys(errs).length > 0) {
-      setErrors(errs);
-      return;
-    }
-
-    setIsSubmitting(true);
+    setLoading(true);
     try {
-      const payload = {
-        subject: form.subject.trim(),
-        category: form.category,
-        priority: form.priority,
-        description: form.description.trim(),
-        fileName: form.file?.name || null,
-      };
-
-      const result = await createTicket(payload);
-
-      if (result.ok) {
-        setSuccess({ ticketId: result.ticketId });
-        setForm(EMPTY_FORM);
-        setErrors({});
+      // Send the backend-likely contract, plus compatibility keys.
+      const payload = { subject, message, title: subject, description: message };
+      if (import.meta?.env?.DEV) {
+        console.info("[RaiseTicket] POST /tickets/create payload", payload);
       }
+      const res = await ticketsBackend.create(payload);
+      const createdId = res?.id || res?.ticketId || res?.ticket?.id;
+      showSuccess("Ticket created");
+      if (createdId) {
+        navigate(`/support/ticket/${encodeURIComponent(String(createdId))}`);
+      } else {
+        navigate("/support/chat");
+      }
+    } catch (e) {
+      const msg = e?.message || "Failed to create ticket";
+      setError(msg);
+      showError(msg);
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
-  }
+  };
 
-  // ── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div className="rt-page">
-      {/* ── Company Header ── */}
-      <header className="rt-header">
-        <div className="rt-header-brand">
-          <img src={logoUrl} alt={companyName} className="rt-header-logo" />
-          <span className="rt-header-name">{companyName}</span>
+    <div style={{ maxWidth: 920, margin: "0 auto", padding: 4 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: 26, letterSpacing: "-0.3px" }}>
+            Raise a ticket
+          </h1>
+          <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+            Tell us what you need and we’ll get back quickly.
+          </div>
         </div>
-        <button className="rt-back-btn" onClick={() => navigate("/dashboard")}>
-          ← Back to Dashboard
+        <button
+          type="button"
+          onClick={() => navigate("/support/chat")}
+          style={{
+            border: "1px solid rgba(148,163,184,0.5)",
+            background: "#fff",
+            borderRadius: 12,
+            padding: "10px 12px",
+            cursor: "pointer",
+            fontWeight: 950,
+            height: 42,
+          }}
+        >
+          ← My tickets
         </button>
-      </header>
+      </div>
 
-      {/* ── Content ── */}
-      <div className="rt-content">
-        <div className="rt-card">
-          {/* Card Header */}
-          <div className="rt-card-header">
-            <div className="rt-card-icon">
-              <svg
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#2563eb"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 8v4M12 16h.01" />
-              </svg>
-            </div>
-            <div>
-              <h1 className="rt-card-title">Raise a Ticket</h1>
-              <p className="rt-card-subtitle">
-                Submit a request and our team will get back to you
-              </p>
-            </div>
+      <div
+        style={{
+          marginTop: 14,
+          background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
+          borderRadius: 16,
+          padding: 18,
+          border: "1px solid rgba(37,99,235,0.12)",
+          boxShadow: "0 10px 26px rgba(15,23,42,0.08)",
+        }}
+      >
+        {error ? (
+          <div
+            style={{
+              marginBottom: 14,
+              padding: "12px 14px",
+              borderRadius: 12,
+              background: "#fff1f2",
+              border: "1px solid #fecaca",
+              color: "#b91c1c",
+              fontSize: 13,
+              fontWeight: 800,
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submit();
+          }}
+          style={{ display: "grid", gap: 12 }}
+        >
+          <div>
+            <label style={labelStyle} htmlFor="ticket-title">
+              Subject
+            </label>
+            <input
+              id="ticket-title"
+              value={form.subject}
+              onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}
+              placeholder="e.g. Payment failed but amount debited"
+              style={inputStyle(Boolean(fieldErrors.subject))}
+              disabled={loading}
+            />
+            {fieldErrors.subject ? (
+              <div style={fieldErrorStyle}>{fieldErrors.subject}</div>
+            ) : null}
           </div>
 
-          {/* ── Success Banner ── */}
-          {success && (
-            <div className="rt-success">
-              <div className="rt-success-icon">✓</div>
-              <div className="rt-success-body">
-                <p className="rt-success-title">
-                  Ticket submitted successfully!
-                </p>
-                <p className="rt-success-id">
-                  Your ticket ID:{" "}
-                  <strong className="rt-ticket-id">{success.ticketId}</strong>
-                </p>
-                <p className="rt-success-note">
-                  Our team will review and respond within 24 hours.
-                </p>
-              </div>
-              <button
-                className="rt-success-close"
-                onClick={() => setSuccess(null)}
-                aria-label="Dismiss"
-              >
-                ×
-              </button>
-            </div>
-          )}
+          <div>
+            <label style={labelStyle} htmlFor="ticket-desc">
+              Message
+            </label>
+            <textarea
+              id="ticket-desc"
+              value={form.message}
+              onChange={(e) => setForm((p) => ({ ...p, message: e.target.value }))}
+              placeholder="Include steps, error messages, and any relevant details."
+              style={{
+                ...inputStyle(Boolean(fieldErrors.message)),
+                minHeight: 140,
+                resize: "vertical",
+                lineHeight: 1.5,
+              }}
+              disabled={loading}
+            />
+            {fieldErrors.message ? (
+              <div style={fieldErrorStyle}>{fieldErrors.message}</div>
+            ) : null}
+          </div>
 
-          {/* ── Form ── */}
-          <form className="rt-form" onSubmit={handleSubmit} noValidate>
-            {/* Subject */}
-            <div className="rt-field">
-              <label className="rt-label" htmlFor="rt-subject">
-                Subject <span className="rt-required">*</span>
-              </label>
-              <input
-                id="rt-subject"
-                className={`rt-input ${errors.subject ? "rt-input--error" : ""}`}
-                value={form.subject}
-                onChange={(e) => handleChange("subject", e.target.value)}
-                placeholder="Brief description of your issue"
-                maxLength={120}
-              />
-              {errors.subject && (
-                <span className="rt-error">{errors.subject}</span>
-              )}
-            </div>
-
-            {/* Category + Priority row */}
-            <div className="rt-row">
-              <div className="rt-field">
-                <label className="rt-label" htmlFor="rt-category">
-                  Category <span className="rt-required">*</span>
-                </label>
-                <select
-                  id="rt-category"
-                  className={`rt-select ${errors.category ? "rt-input--error" : ""}`}
-                  value={form.category}
-                  onChange={(e) => handleChange("category", e.target.value)}
-                >
-                  <option value="">Select category</option>
-                  {CATEGORIES.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-                {errors.category && (
-                  <span className="rt-error">{errors.category}</span>
-                )}
-              </div>
-
-              <div className="rt-field">
-                <label className="rt-label">
-                  Priority <span className="rt-required">*</span>
-                </label>
-                <div className="rt-priority-group">
-                  {PRIORITIES.map((p) => {
-                    const colors = PRIORITY_COLORS[p];
-                    const active = form.priority === p;
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        className={`rt-priority-btn ${active ? "rt-priority-btn--active" : ""}`}
-                        style={
-                          active
-                            ? {
-                                background: colors.bg,
-                                color: colors.color,
-                                borderColor: colors.color,
-                              }
-                            : {}
-                        }
-                        onClick={() => handleChange("priority", p)}
-                      >
-                        {p}
-                      </button>
-                    );
-                  })}
-                </div>
-                {errors.priority && (
-                  <span className="rt-error">{errors.priority}</span>
-                )}
-              </div>
-            </div>
-
-            {/* Description */}
-            <div className="rt-field">
-              <label className="rt-label" htmlFor="rt-description">
-                Description <span className="rt-required">*</span>
-              </label>
-              <textarea
-                id="rt-description"
-                className={`rt-textarea ${errors.description ? "rt-input--error" : ""}`}
-                value={form.description}
-                onChange={(e) => handleChange("description", e.target.value)}
-                placeholder="Please describe your issue in detail…"
-                rows={5}
-                maxLength={2000}
-              />
-              <div className="rt-char-count">
-                {form.description.length}/2000
-              </div>
-              {errors.description && (
-                <span className="rt-error">{errors.description}</span>
-              )}
-            </div>
-
-            {/* File upload */}
-            <div className="rt-field">
-              <label className="rt-label" htmlFor="rt-file">
-                Attachment <span className="rt-optional">(optional)</span>
-              </label>
-              <label htmlFor="rt-file" className="rt-file-label">
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="#64748b"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-                {form.file ? (
-                  <span className="rt-file-name">{form.file.name}</span>
-                ) : (
-                  <span>Click to attach a file</span>
-                )}
-              </label>
-              <input
-                id="rt-file"
-                type="file"
-                className="rt-file-input"
-                onChange={handleFileChange}
-                accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.txt,.zip"
-              />
-              <p className="rt-file-hint">
-                Supported: JPG, PNG, PDF, DOC, TXT, ZIP — Max 10 MB
-              </p>
-            </div>
-
-            {/* Actions */}
-            <div className="rt-actions">
-              <button
-                type="button"
-                className="rt-btn-ghost"
-                onClick={() => {
-                  setForm(EMPTY_FORM);
-                  setErrors({});
-                  setSuccess(null);
-                }}
-              >
-                Clear Form
-              </button>
-              <button
-                type="submit"
-                className="rt-btn-submit"
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? (
-                  <>
-                    <span className="rt-spinner" />
-                    Submitting…
-                  </>
-                ) : (
-                  "Submit Ticket"
-                )}
-              </button>
-            </div>
-          </form>
-
-          {/* Footer hint */}
-          <p className="rt-hint">
-            Need immediate help?{" "}
-            <button
-              className="rt-link-btn"
-              onClick={() => navigate("/support/chat")}
-            >
-              Chat with Support
-            </button>
-          </p>
-        </div>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            style={{
+              border: "none",
+              borderRadius: 14,
+              padding: "12px 14px",
+              fontWeight: 950,
+              cursor: loading ? "not-allowed" : "pointer",
+              background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+              color: "#fff",
+              boxShadow: "0 14px 34px rgba(37,99,235,0.24)",
+              opacity: canSubmit ? 1 : 0.6,
+            }}
+          >
+            {loading ? "Submitting..." : "Submit ticket"}
+          </button>
+        </form>
       </div>
     </div>
   );
 }
+
+const labelStyle = {
+  display: "block",
+  marginBottom: 6,
+  fontSize: 12,
+  fontWeight: 900,
+  color: "#0f172a",
+};
+
+const fieldErrorStyle = {
+  marginTop: 6,
+  color: "#b91c1c",
+  fontSize: 12,
+  fontWeight: 700,
+};
+
+const inputStyle = (invalid) => ({
+  width: "100%",
+  borderRadius: 14,
+  border: `1px solid ${invalid ? "#fecaca" : "rgba(148,163,184,0.6)"}`,
+  padding: "12px 12px",
+  outline: "none",
+  background: "#fff",
+  boxShadow: invalid ? "0 0 0 3px rgba(239,68,68,0.12)" : "none",
+});
+

@@ -1,11 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { getRegisteredUsers } from "../services/registrationStore";
 import { setLogoutHandler } from "../services/apiClient";
-import { clearAuth as clearAuthFromStorage } from "../services/fetchApi";
+import { profileBackend } from "../services/backendApis";
 
 const TOKEN_KEY = "ui-access-token";
-const USER_KEY = "ui-auth-user";
 const USER_ID_KEY = "userId";
+const PROFILE_KEY = "ui-profile";
 
 const AuthContext = createContext(null);
 
@@ -16,6 +15,72 @@ export function getInitials(name) {
   const first = parts[0]?.[0] || "U";
   const second = parts.length > 1 ? parts[1]?.[0] || "" : "";
   return (first + second).toUpperCase();
+}
+
+/**
+ * Coalesce common API shapes so UI can rely on `name` / `email`.
+ * (e.g. backend returns fullName but not name)
+ */
+export function normalizeProfilePayload(data) {
+  if (!data || typeof data !== "object") return data;
+
+  let merged = { ...data };
+  if (data.profile && typeof data.profile === "object") {
+    const p = data.profile;
+    merged = {
+      ...merged,
+      ...p,
+      kyc: p.kyc ?? merged.kyc ?? data.kyc,
+    };
+  }
+
+  const nestedUser =
+    merged.user && typeof merged.user === "object" ? merged.user : null;
+  const fromParts = [merged.firstName, merged.lastName].filter(Boolean).join(" ").trim();
+  const coalescedName = String(
+    merged.name ||
+      merged.fullName ||
+      merged.full_name ||
+      fromParts ||
+      merged.userName ||
+      nestedUser?.name ||
+      "",
+  ).trim();
+  const coalescedEmail = String(
+    merged.email || nestedUser?.email || merged.userEmail || "",
+  ).trim();
+  const phoneRaw =
+    merged.phoneNumber ??
+    merged.phone ??
+    merged.mobile ??
+    merged.mobileNumber ??
+    nestedUser?.phoneNumber ??
+    "";
+  const coalescedPhone = String(phoneRaw || "").trim();
+
+  const nestedKyc =
+    merged.kyc && typeof merged.kyc === "object" ? merged.kyc : null;
+
+  return {
+    ...merged,
+    ...(coalescedName ? { name: coalescedName } : {}),
+    ...(coalescedEmail ? { email: coalescedEmail } : {}),
+    ...(coalescedPhone ? { phoneNumber: coalescedPhone } : {}),
+    ...(nestedKyc ? { kyc: nestedKyc } : {}),
+  };
+}
+
+/**
+ * Greeting token: profile.name → nested user.name → email local-part → "" (caller shows "there").
+ */
+export function getGreetingFirstName(profile) {
+  const n = String(profile?.name || "").trim();
+  if (n) return n.split(/\s+/)[0];
+  const u = String(profile?.user?.name || "").trim();
+  if (u) return u.split(/\s+/)[0];
+  const e = String(profile?.email || "").trim();
+  if (e) return e.split("@")[0];
+  return "";
 }
 
 function titleCaseFromIdentifier(identifier) {
@@ -30,154 +95,102 @@ function titleCaseFromIdentifier(identifier) {
     .split(" ")
     .filter(Boolean)
     .slice(0, 3)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(" ");
 }
 
-function readInitialUser() {
-  if (typeof window === "undefined") return null;
-  const saved = window.localStorage.getItem(USER_KEY);
-  if (!saved) return null;
-  try {
-    return JSON.parse(saved);
-  } catch {
-    return null;
-  }
-}
-
-function writeUser(nextUser) {
-  window.localStorage.setItem(USER_KEY, JSON.stringify(nextUser));
-}
-
-function normalizeRole(role) {
-  // Role should be stored consistently as "admin" / "user".
-  const r = String(role || "")
-    .trim()
-    .toLowerCase();
-  return r === "admin" ? "admin" : "user";
-}
-
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(() => readInitialUser());
-
-  useEffect(() => {
-    // Keep state in sync if another tab updates localStorage.
-    const onStorage = (e) => {
-      if (e.key !== USER_KEY) return;
-      setUser(readInitialUser());
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
-  }, []);
-
-  // Register the logout function with the axios client so the 401 interceptor
-  // can force a logout without importing AuthContext (avoids circular deps).
-  useEffect(() => {
-    setLogoutHandler(logout);
-  }, []);
-
-  const isAuthenticated = !!user && !!window.localStorage.getItem(TOKEN_KEY);
-
-  const persistAuth = (nextUser) => {
-    const existingToken = window.localStorage.getItem(TOKEN_KEY);
-    if (!existingToken) {
-      // Keep non-backend mock login paths functional without overriding real tokens.
-      const token = `mock-token-${Date.now().toString(36)}`;
-      window.localStorage.setItem(TOKEN_KEY, token);
+  const [profile, setProfile] = useState(() => {
+    const raw = window.localStorage.getItem(PROFILE_KEY);
+    if (!raw) return null;
+    try {
+      return normalizeProfilePayload(JSON.parse(raw));
+    } catch {
+      return null;
     }
-    writeUser(nextUser);
-    setUser(nextUser);
-  };
+  });
+  const [initializing, setInitializing] = useState(true);
 
-  const loginWithEmail = async ({ email, role }) => {
-    // TODO: connect to backend API
-    const normalized = String(email || "")
-      .trim()
-      .toLowerCase();
-    const stored = getRegisteredUsers().find(
-      (u) =>
-        String(u?.email || "")
-          .trim()
-          .toLowerCase() === normalized,
-    );
-    const nextRole = normalizeRole(role);
-    const nextUser = {
-      name: stored?.name || titleCaseFromIdentifier(normalized),
-      email: normalized,
-      role: nextRole,
-      phone: stored?.phone || undefined,
-    };
-    persistAuth(nextUser);
-    return nextUser;
-  };
+  const token = window.localStorage.getItem(TOKEN_KEY) || "";
 
-  const loginWithGoogle = async ({ role }) => {
-    // TODO: connect to backend API
-    const nextRole = normalizeRole(role);
-    const nextUser = {
-      name: nextRole === "admin" ? "Admin Google User" : "Google User",
-      email:
-        nextRole === "admin"
-          ? "admin.google@example.com"
-          : "user.google@example.com",
-      role: nextRole,
-    };
-    persistAuth(nextUser);
-    return nextUser;
-  };
-
-  const loginWithPhoneOtp = async ({ phone, otp, role }) => {
-    // TODO: connect to backend API
-    const nextRole = normalizeRole(role);
-    const digits = String(phone || "").replace(/\D/g, "");
-    const stored = getRegisteredUsers().find(
-      (u) => String(u?.phone || "").replace(/\D/g, "") === digits,
-    );
-    const nextUser = {
-      name: stored?.name || (digits ? `User ${digits.slice(-4)}` : "OTP User"),
-      email:
-        nextRole === "admin"
-          ? `admin.${digits.slice(-4) || "otp"}@example.com`
-          : `user.${digits.slice(-4) || "otp"}@example.com`,
-      role: nextRole,
-      phone: digits,
-      // keep otp off the user object intentionally
-    };
-    if (stored?.email) {
-      nextUser.email = stored.email.toLowerCase();
+  const writeProfile = (nextProfile) => {
+    if (!nextProfile) {
+      window.localStorage.removeItem(PROFILE_KEY);
+      return;
     }
-    persistAuth(nextUser);
-    return nextUser;
+    window.localStorage.setItem(PROFILE_KEY, JSON.stringify(nextProfile));
+  };
+
+  const hydrateProfile = async () => {
+    const currentToken = window.localStorage.getItem(TOKEN_KEY);
+    if (!currentToken) {
+      setProfile(null);
+      writeProfile(null);
+      return null;
+    }
+    const data = await profileBackend.getProfile();
+    const next = data ? normalizeProfilePayload(data) : null;
+    setProfile(next);
+    writeProfile(next);
+    return next;
+  };
+
+  const onLoginSuccess = async ({ token: nextToken, userId }) => {
+    const trimmed = typeof nextToken === "string" ? nextToken.trim() : nextToken;
+    if (trimmed) window.localStorage.setItem(TOKEN_KEY, trimmed);
+    if (userId) window.localStorage.setItem(USER_ID_KEY, String(userId));
+    await hydrateProfile();
   };
 
   const updateUser = (patch) => {
-    // TODO: connect to backend API
-    setUser((prev) => {
-      const next = { ...(prev || {}), ...(patch || {}) };
-      writeUser(next);
+    setProfile((prev) => {
+      const next = normalizeProfilePayload({
+        ...(prev || {}),
+        ...(patch || {}),
+      });
+      writeProfile(next);
       return next;
     });
   };
 
   const logout = () => {
+    setProfile(null);
     window.localStorage.removeItem(TOKEN_KEY);
-    window.localStorage.removeItem(USER_KEY);
     window.localStorage.removeItem(USER_ID_KEY);
-    clearAuthFromStorage();
-    setUser(null);
+    window.localStorage.removeItem(PROFILE_KEY);
   };
+
+  useEffect(() => {
+    setLogoutHandler(logout);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        await hydrateProfile();
+      } catch {
+        // If token exists but profile fetch fails, keep UI usable; pages can show errors.
+      } finally {
+        if (active) setInitializing(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const value = useMemo(
     () => ({
-      user,
-      isAuthenticated,
-      loginWithEmail,
-      loginWithGoogle,
-      loginWithPhoneOtp,
-      updateUser,
+      token,
+      profile,
+      initializing,
+      hydrateProfile,
+      onLoginSuccess,
+      updateProfile: updateUser,
       logout,
     }),
-    [user, isAuthenticated],
+    [token, profile, initializing],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -1,34 +1,83 @@
-import { useState, useEffect } from "react";
-import { appsApi } from "../services";
+import { useEffect, useMemo, useState } from "react";
+import { applicationBackend } from "../services/backendApis";
+import { showError } from "../services/toast";
+import { onMyAppsChanged } from "../services/uiEvents";
 
 export default function MyApps() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
-  const [myApps, setMyApps] = useState([]);
+  const [appsCatalog, setAppsCatalog] = useState([]);
+  const [myAppsRaw, setMyAppsRaw] = useState([]);
 
   useEffect(() => {
-    const loadMyApps = async () => {
+    let alive = true;
+
+    const loadAll = async () => {
       setLoading(true);
       setError("");
       try {
-        const subscribedApps = await appsApi.getMyApps();
-        setMyApps(Array.isArray(subscribedApps) ? subscribedApps : []);
+        const [catalog, mine] = await Promise.all([
+          applicationBackend.list(),
+          applicationBackend.my(),
+        ]);
+        if (!alive) return;
+        setAppsCatalog(Array.isArray(catalog) ? catalog : []);
+        setMyAppsRaw(Array.isArray(mine) ? mine : []);
       } catch (serviceError) {
+        if (!alive) return;
         setError(serviceError?.message || "Unable to load your apps.");
       } finally {
-        setLoading(false);
+        if (alive) setLoading(false);
       }
     };
 
-    loadMyApps();
+    const refreshMine = async () => {
+      try {
+        const mine = await applicationBackend.my();
+        if (!alive) return;
+        setMyAppsRaw(Array.isArray(mine) ? mine : []);
+      } catch {
+        // ignore; keep current list
+      }
+    };
+
+    loadAll();
+
+    const off = onMyAppsChanged(() => {
+      refreshMine();
+    });
+
+    return () => {
+      alive = false;
+      off();
+    };
   }, []);
 
-  const categories = [
-    "All",
-    ...new Set(myApps.map((app) => app.category).filter(Boolean)),
-  ];
+  const myApps = useMemo(() => {
+    const byId = new Map(
+      (Array.isArray(appsCatalog) ? appsCatalog : []).map((a) => [a.appId, a]),
+    );
+    return (Array.isArray(myAppsRaw) ? myAppsRaw : []).map((row) => {
+      const meta = byId.get(row.id) || {};
+      return {
+        appId: meta.appId || row.id,
+        name: meta.appName || `App #${row.id}`,
+        description: meta.appText || "—",
+        category: meta.appType || "APP",
+        appUrl: meta.appUrl || "",
+        visitCounter: row.visitCounter ?? 0,
+        subscriptionStatus: String(row.subscriptionStatus || "ACTIVE").toUpperCase(),
+        updatedAt: row.updatedAt,
+      };
+    });
+  }, [appsCatalog, myAppsRaw]);
+
+  const categories = useMemo(
+    () => ["All", ...new Set(myApps.map((app) => app.category).filter(Boolean))],
+    [myApps],
+  );
 
   const filteredApps = myApps.filter((app) => {
     const matchesSearch = `${app.name} ${app.description}`
@@ -38,9 +87,10 @@ export default function MyApps() {
     return matchesSearch && matchesCategory;
   });
 
-  const handleUnsubscribe = async (appId) => {
-    await appsApi.toggleSubscription(appId, false);
-    setMyApps((prev) => prev.filter((item) => item.id !== appId));
+  const openApp = (url) => {
+    const u = String(url || "").trim();
+    if (!u) return;
+    window.open(u, "_blank", "noopener,noreferrer");
   };
 
   if (loading) {
@@ -147,7 +197,7 @@ export default function MyApps() {
         >
           {filteredApps.map((app) => (
             <div
-              key={app.id}
+              key={app.appId}
               style={{
                 padding: "24px",
                 borderRadius: "12px",
@@ -220,47 +270,54 @@ export default function MyApps() {
                   {app.category}
                 </span>
                 <span style={{ fontSize: "14px", color: "#6b7280" }}>
-                  Last used: {app.lastUsed}
+                  Updated:{" "}
+                  {app.updatedAt ? new Date(app.updatedAt).toLocaleString() : "—"}
                 </span>
               </div>
 
-              <div style={{ marginBottom: "16px" }}>
-                <div
+              <div
+                style={{
+                  marginBottom: 16,
+                  display: "flex",
+                  gap: 10,
+                  flexWrap: "wrap",
+                }}
+              >
+                <span
                   style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    marginBottom: "4px",
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    background: "#f1f5f9",
+                    color: "#0f172a",
+                    fontSize: 12,
+                    fontWeight: 800,
                   }}
                 >
-                  <span style={{ fontSize: "14px", color: "#6b7280" }}>
-                    Usage
-                  </span>
-                  <span style={{ fontSize: "14px", fontWeight: "500" }}>
-                    {app.usage}
-                  </span>
-                </div>
-                <div
+                  Usage: {Number(app.visitCounter) || 0}
+                </span>
+                <span
                   style={{
-                    width: "100%",
-                    height: "6px",
-                    backgroundColor: "#e5e7eb",
-                    borderRadius: "3px",
+                    padding: "6px 10px",
+                    borderRadius: 999,
+                    background:
+                      app.subscriptionStatus === "ACTIVE"
+                        ? "#dcfce7"
+                        : "#fee2e2",
+                    color:
+                      app.subscriptionStatus === "ACTIVE"
+                        ? "#166534"
+                        : "#991b1b",
+                    fontSize: 12,
+                    fontWeight: 900,
                   }}
                 >
-                  <div
-                    style={{
-                      width: app.usage,
-                      height: "6px",
-                      backgroundColor: "#2563eb",
-                      borderRadius: "3px",
-                      transition: "width 0.3s",
-                    }}
-                  ></div>
-                </div>
+                  {app.subscriptionStatus}
+                </span>
               </div>
 
               <div style={{ display: "flex", gap: "10px" }}>
                 <button
+                  type="button"
                   style={{
                     flex: 1,
                     padding: "8px 16px",
@@ -272,6 +329,13 @@ export default function MyApps() {
                     cursor: "pointer",
                     transition: "background-color 0.2s",
                   }}
+                  onClick={() => {
+                    if (!app.appUrl) {
+                      showError("Missing app URL");
+                      return;
+                    }
+                    openApp(app.appUrl);
+                  }}
                   onMouseEnter={(e) =>
                     (e.currentTarget.style.backgroundColor = "#1d4ed8")
                   }
@@ -280,27 +344,6 @@ export default function MyApps() {
                   }
                 >
                   Open App
-                </button>
-                <button
-                  onClick={() => handleUnsubscribe(app.id)}
-                  style={{
-                    padding: "8px 16px",
-                    backgroundColor: "#fef2f2",
-                    color: "#b91c1c",
-                    border: "1px solid #fecaca",
-                    borderRadius: "6px",
-                    fontSize: "14px",
-                    cursor: "pointer",
-                    transition: "background-color 0.2s",
-                  }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.backgroundColor = "#fee2e2")
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.backgroundColor = "#fef2f2")
-                  }
-                >
-                  Unsubscribe
                 </button>
               </div>
             </div>

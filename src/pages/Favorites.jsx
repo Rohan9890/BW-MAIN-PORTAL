@@ -1,44 +1,54 @@
 import { useEffect, useMemo, useState } from "react";
-import { mockData } from "../services/mockData";
-
-const STORAGE_KEY = "bold-wise-allapps";
-
-const normalizeApps = (items) =>
-  (Array.isArray(items) ? items : []).map((app, index) => ({
-    ...app,
-    id: app.id ?? index + 1,
-    rating: app.rating ?? 4,
-    favoritedDate: app.favoritedDate ?? "2026-03-30",
-  }));
+import { applicationBackend, favoritesBackend } from "../services/backendApis";
+import { showError, showSuccess } from "../services/toast";
+import { PageError, PageLoading } from "../components/PageStates";
 
 export default function Favorites() {
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [favorites, setFavorites] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [favoriteIds, setFavoriteIds] = useState(() => new Set());
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-
-    if (stored) {
+    let active = true;
+    (async () => {
+      setLoading(true);
+      setError("");
       try {
-        const parsed = JSON.parse(stored);
-        const storedFavorites = normalizeApps(parsed).filter(
-          (app) => app.wishlisted,
+        const [list, favs] = await Promise.all([
+          applicationBackend.list(),
+          favoritesBackend.list(),
+        ]);
+        if (!active) return;
+        const ids = new Set(
+          (Array.isArray(favs) ? favs : [])
+            .map((x) => x?.appId ?? x?.id ?? x)
+            .filter((v) => v !== undefined && v !== null)
+            .map((v) => Number(v)),
         );
-        setFavorites(storedFavorites);
-        return;
-      } catch (error) {
-        console.warn("Failed parsing saved favorites", error);
+        setFavoriteIds(ids);
+        const favApps = (Array.isArray(list) ? list : [])
+          .filter((a) => ids.has(Number(a.appId)))
+          .map((a) => ({
+            appId: a.appId,
+            name: a.appName,
+            description: a.appText || "—",
+            category: a.appType || "APP",
+            appUrl: a.appUrl,
+          }));
+        setFavorites(favApps);
+      } catch (e) {
+        if (!active) return;
+        setError(e?.message || "Unable to load favorites.");
+      } finally {
+        if (active) setLoading(false);
       }
-    }
-
-    const fallbackFavorites = normalizeApps(mockData.appCatalog.allApps)
-      .filter((app) => app.wishlisted)
-      .map((app) => ({
-        ...app,
-        favoritedDate: app.favoritedDate || "2026-03-30",
-      }));
-    setFavorites(fallbackFavorites);
+    })();
+    return () => {
+      active = false;
+    };
   }, []);
 
   const categories = useMemo(
@@ -61,22 +71,16 @@ export default function Favorites() {
     [favorites, search, category],
   );
 
-  const handleRemoveFavorite = (appId) => {
-    setFavorites((prev) => prev.filter((item) => item.id !== appId));
-
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (!stored) return;
-
+  const handleRemoveFavorite = async (appId) => {
+    const next = new Set(favoriteIds);
+    next.delete(Number(appId));
+    setFavoriteIds(next);
+    setFavorites((prev) => prev.filter((item) => item.appId !== appId));
     try {
-      const parsed = JSON.parse(stored);
-      const next = normalizeApps(parsed).map((app) =>
-        app.id === appId
-          ? { ...app, wishlisted: false, favoritedDate: null }
-          : app,
-      );
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-    } catch (error) {
-      console.warn("Failed updating favorites storage", error);
+      await favoritesBackend.remove(appId);
+      showSuccess("Removed from favorites");
+    } catch (e) {
+      showError(e?.message || "Unable to update favorites");
     }
   };
 
@@ -124,7 +128,11 @@ export default function Favorites() {
         </div>
       </div>
 
-      {filteredFavorites.length === 0 ? (
+      {loading ? (
+        <PageLoading title="Loading favorites..." />
+      ) : error ? (
+        <PageError message={error} />
+      ) : filteredFavorites.length === 0 ? (
         <div
           style={{
             textAlign: "center",
@@ -152,7 +160,7 @@ export default function Favorites() {
         >
           {filteredFavorites.map((app) => (
             <div
-              key={app.id}
+              key={app.appId}
               style={{
                 padding: "24px",
                 borderRadius: "12px",
@@ -256,7 +264,7 @@ export default function Favorites() {
                   {app.category}
                 </span>
                 <span style={{ fontSize: "14px", color: "#6b7280" }}>
-                  Added {app.favoritedDate}
+                  App ID: {app.appId}
                 </span>
               </div>
 
@@ -273,6 +281,14 @@ export default function Favorites() {
                     cursor: "pointer",
                     transition: "background-color 0.2s",
                   }}
+                  onClick={() => {
+                    const u = String(app.appUrl || "").trim();
+                    if (!u) {
+                      showError("Missing app URL");
+                      return;
+                    }
+                    window.open(u, "_blank", "noopener,noreferrer");
+                  }}
                   onMouseEnter={(e) =>
                     (e.currentTarget.style.backgroundColor = "#1d4ed8")
                   }
@@ -283,7 +299,7 @@ export default function Favorites() {
                   Open App
                 </button>
                 <button
-                  onClick={() => handleRemoveFavorite(app.id)}
+                  onClick={() => void handleRemoveFavorite(app.appId)}
                   style={{
                     padding: "8px 16px",
                     backgroundColor: "#fef2f2",

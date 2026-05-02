@@ -1,20 +1,12 @@
-import { apiClient } from "./apiClient";
-import { endpoints } from "./endpoints";
-import { mockData } from "./mockData";
-import { safeServiceCall } from "./serviceUtils";
-
 export const settingsApi = {
   async getSettings() {
-    return safeServiceCall({
-      request: () => apiClient.get(endpoints.settings.me),
-      fallback: mockData.settings,
-    });
+    // Backend endpoint not confirmed stable; disabled to avoid 500s.
+    return null;
   },
 
   async updateSettings(payload) {
-    return safeServiceCall({
-      request: () => apiClient.put(endpoints.settings.me, payload),
-      fallback: { success: true, settings: payload },
-    });
+    void payload;
+    // Disabled until backend confirms /settings/me contract.
+    return null;
   },
 };

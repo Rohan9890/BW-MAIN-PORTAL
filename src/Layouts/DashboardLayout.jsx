@@ -1,44 +1,59 @@
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useBrand } from "../context/BrandContext";
-import { dashboardApi } from "../services";
 import { getInitials, useAuth } from "../context/AuthContext";
+import { notificationsBackend } from "../services/backendApis";
+import { mapNotificationRows } from "../services/notificationUtils";
+import { showError, showSuccess } from "../services/toast";
 
 export default function DashboardLayout() {
   const { brand, defaultBrand } = useBrand();
-  const { user, logout } = useAuth();
+  const { profile, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
   const [showPopup, setShowPopup] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [notifLoading, setNotifLoading] = useState(false);
   const path = location.pathname;
-  const unreadCount = notifications.filter((item) => !item.read).length;
-  const initials = getInitials(user?.name || "User");
+  const initials = getInitials(profile?.name || "User");
 
   useEffect(() => {
     let isMounted = true;
 
     const loadNotifications = async () => {
-      const activities = await dashboardApi.getActivitySummary();
-      if (!isMounted) return;
-
-      const mapped = Array.isArray(activities)
-        ? activities.slice(0, 5).map((item, index) => ({
-            id: item.id || index + 1,
-            text: item.title,
-            time: item.timestamp || "recent",
-            read: index > 1,
-          }))
-        : [];
-
-      setNotifications(mapped);
+      setNotifLoading(true);
+      try {
+        const page = await notificationsBackend.list({ page: 0, size: 20 });
+        if (!isMounted) return;
+        const rows = mapNotificationRows(page);
+        setNotifications(rows);
+        setUnreadCount(rows.filter((r) => !r.read).length);
+      } catch (e) {
+        if (!isMounted) return;
+        // Keep UI usable; show toast on bell open instead.
+      } finally {
+        if (isMounted) setNotifLoading(false);
+      }
     };
 
     loadNotifications();
 
+    const poll = window.setInterval(() => {
+      notificationsBackend
+        .list({ page: 0, size: 20 })
+        .then((page) => {
+          if (!isMounted) return;
+          const rows = mapNotificationRows(page);
+          setUnreadCount(rows.filter((r) => !r.read).length);
+        })
+        .catch(() => {});
+    }, 30_000);
+
     return () => {
       isMounted = false;
+      window.clearInterval(poll);
     };
   }, []);
 
@@ -49,19 +64,86 @@ export default function DashboardLayout() {
 
   const handleNotificationClick = () => {
     setShowPopup(false);
-    setShowNotifications((prev) => !prev);
+    setShowNotifications((prev) => {
+      const next = !prev;
+      if (next) {
+        // refresh list on open (fast)
+        setNotifLoading(true);
+        notificationsBackend
+          .list({ page: 0, size: 20 })
+          .then((page) => {
+            const rows = mapNotificationRows(page);
+            setUnreadCount(rows.filter((r) => !r.read).length);
+            setNotifications(rows);
+          })
+          .catch(() => {})
+          .finally(() => setNotifLoading(false));
+      }
+      return next;
+    });
   };
 
-  const handleNotificationItemClick = (id) => {
-    setNotifications((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, read: true } : item)),
-    );
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key === "Escape") {
+        setShowNotifications(false);
+        setShowPopup(false);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const handleNotificationItemClick = async (item) => {
+    const id = item?.id;
+    if (id != null) {
+      setNotifications((prev) =>
+        prev.map((row) => (row.id === id ? { ...row, read: true } : row)),
+      );
+      setUnreadCount((c) => Math.max(0, Number(c) - 1));
+      try {
+        await notificationsBackend.markRead(id);
+      } catch (e) {
+        showError(e?.message || "Failed to mark as read");
+      }
+    }
     setShowNotifications(false);
+    const target = item?.navigateTo;
+    if (target && /^https?:\/\//i.test(target)) {
+      window.open(target, "_blank", "noopener,noreferrer");
+      return;
+    }
+    if (target && String(target).startsWith("/")) {
+      navigate(target);
+      return;
+    }
     navigate("/activity");
   };
 
-  const handleMarkAllRead = () => {
-    setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+  const handleMarkAllRead = async () => {
+    if (!notifications.some((n) => !n.read)) return;
+    try {
+      await notificationsBackend.readAll();
+      setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
+      setUnreadCount(0);
+      showSuccess("All caught up");
+    } catch (e) {
+      showError(e?.message || "Could not mark all as read");
+    }
+  };
+
+  const handleDeleteNotification = async (e, id) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const hit = notifications.find((n) => n.id === id);
+    const wasUnread = Boolean(hit && !hit.read);
+    try {
+      await notificationsBackend.deleteById(id);
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      if (wasUnread) setUnreadCount((c) => Math.max(0, Number(c) - 1));
+    } catch (err) {
+      showError(err?.message || "Could not remove notification");
+    }
   };
 
   const handleOptionClick = (option) => {
@@ -235,6 +317,7 @@ export default function DashboardLayout() {
                 }}
                 title="Notifications"
                 aria-label="Notifications"
+                aria-expanded={showNotifications}
               >
                 <svg
                   width="18"
@@ -284,15 +367,17 @@ export default function DashboardLayout() {
                     position: "absolute",
                     top: "calc(100% + 10px)",
                     right: 0,
-                    width: 300,
+                    width: 328,
                     background: "#ffffff",
                     border: "1px solid rgba(37,99,235,0.12)",
-                    borderRadius: 14,
+                    borderRadius: 16,
                     boxShadow:
                       "0 20px 60px rgba(15, 23, 42, 0.18), 0 4px 16px rgba(37,99,235,0.08)",
                     zIndex: 200,
                     overflow: "hidden",
                   }}
+                  role="dialog"
+                  aria-label="Notifications"
                 >
                   <div
                     style={{
@@ -301,11 +386,12 @@ export default function DashboardLayout() {
                       display: "flex",
                       justifyContent: "space-between",
                       alignItems: "center",
+                      gap: 10,
                       background: "linear-gradient(135deg, #f8fbff, #ffffff)",
                     }}
                   >
                     <div
-                      style={{ display: "flex", alignItems: "center", gap: 8 }}
+                      style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}
                     >
                       <span
                         style={{
@@ -315,95 +401,144 @@ export default function DashboardLayout() {
                           background:
                             "linear-gradient(135deg, #2563eb, #1d4ed8)",
                           display: "inline-block",
+                          flexShrink: 0,
                         }}
                       />
-                      <strong
-                        style={{
-                          fontSize: 14,
-                          color: "#0f172a",
-                          fontWeight: 700,
-                        }}
-                      >
-                        Notifications
-                      </strong>
+                      <div style={{ minWidth: 0 }}>
+                        <strong
+                          style={{
+                            fontSize: 14,
+                            color: "#0f172a",
+                            fontWeight: 800,
+                            display: "block",
+                          }}
+                        >
+                          Notifications
+                        </strong>
+                        <span style={{ fontSize: 11, color: "#64748b", fontWeight: 600 }}>
+                          {unreadCount ? `${unreadCount} unread` : "You’re all caught up"}
+                        </span>
+                      </div>
                     </div>
                     <button
-                      onClick={handleMarkAllRead}
+                      type="button"
+                      onClick={() => void handleMarkAllRead()}
                       style={{
                         border: "1px solid #dbeafe",
                         background: "#eff6ff",
-                        color: "#2563eb",
+                        color: "#1d4ed8",
                         fontSize: 11,
-                        fontWeight: 600,
+                        fontWeight: 750,
                         cursor: "pointer",
-                        padding: "3px 10px",
-                        borderRadius: 6,
+                        padding: "6px 10px",
+                        borderRadius: 10,
+                        flexShrink: 0,
                       }}
                     >
                       Mark all read
                     </button>
                   </div>
 
-                  <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                  <div style={{ maxHeight: 280, overflowY: "auto" }}>
+                    {notifLoading ? (
+                      <div style={{ padding: 14, color: "#64748b", fontWeight: 600 }}>
+                        Loading…
+                      </div>
+                    ) : null}
                     {notifications.map((item) => (
-                      <button
+                      <div
                         key={item.id}
                         className="notif-item"
-                        onClick={() => handleNotificationItemClick(item.id)}
                         style={{
-                          width: "100%",
-                          border: "none",
-                          background: item.read ? "#fff" : "#f0f6ff",
+                          display: "flex",
+                          alignItems: "stretch",
                           borderBottom: "1px solid #f1f5f9",
-                          textAlign: "left",
-                          padding: "12px 16px",
-                          cursor: "pointer",
-                          display: "grid",
-                          gap: 4,
+                          background: item.read ? "#fff" : "#f0f6ff",
                           transition: "background 0.15s",
                         }}
                       >
-                        <div
+                        <button
+                          type="button"
+                          onClick={() => void handleNotificationItemClick(item)}
                           style={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 8,
+                            flex: 1,
+                            border: "none",
+                            background: "transparent",
+                            textAlign: "left",
+                            padding: "12px 10px 12px 16px",
+                            cursor: "pointer",
+                            display: "grid",
+                            gap: 4,
+                            minWidth: 0,
                           }}
                         >
-                          {!item.read && (
-                            <span
-                              style={{
-                                width: 7,
-                                height: 7,
-                                borderRadius: "50%",
-                                background: "#2563eb",
-                                flexShrink: 0,
-                                display: "inline-block",
-                              }}
-                            />
-                          )}
-                          <span
+                          <div
                             style={{
-                              color: "#0f172a",
-                              fontSize: 13,
-                              fontWeight: item.read ? 500 : 700,
-                              lineHeight: 1.4,
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
                             }}
                           >
-                            {item.text}
-                          </span>
-                        </div>
-                        <small
+                            {!item.read && (
+                              <span
+                                style={{
+                                  width: 7,
+                                  height: 7,
+                                  borderRadius: "50%",
+                                  background: "#2563eb",
+                                  flexShrink: 0,
+                                  display: "inline-block",
+                                }}
+                              />
+                            )}
+                            <span
+                              style={{
+                                color: "#0f172a",
+                                fontSize: 13,
+                                fontWeight: item.read ? 500 : 750,
+                                lineHeight: 1.4,
+                              }}
+                            >
+                              {item.text}
+                            </span>
+                          </div>
+                          <small
+                            style={{
+                              color: "#94a3b8",
+                              fontSize: 11,
+                              paddingLeft: item.read ? 0 : 15,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {item.time}
+                          </small>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Delete notification"
+                          title="Delete"
+                          onClick={(e) => void handleDeleteNotification(e, item.id)}
                           style={{
+                            width: 40,
+                            flexShrink: 0,
+                            border: "none",
+                            borderLeft: "1px solid rgba(148,163,184,0.22)",
+                            background: "transparent",
                             color: "#94a3b8",
-                            fontSize: 11,
-                            paddingLeft: item.read ? 0 : 15,
+                            cursor: "pointer",
+                            fontSize: 16,
+                            fontWeight: 700,
                           }}
                         >
-                          {item.time}
-                        </small>
-                      </button>
+                          ×
+                        </button>
+                      </div>
                     ))}
+                    {!notifLoading && notifications.length === 0 ? (
+                      <div style={{ padding: 18, color: "#64748b", fontWeight: 650, fontSize: 13 }}>
+                        No notifications yet.
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               )}
@@ -428,6 +563,16 @@ export default function DashboardLayout() {
                 userSelect: "none",
               }}
               onClick={handleAvatarClick}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  handleAvatarClick();
+                }
+              }}
+              aria-label="User menu"
+              aria-expanded={showPopup}
             >
               {initials}
               {showPopup && (
@@ -478,12 +623,12 @@ export default function DashboardLayout() {
                         fontSize: 14,
                       }}
                     >
-                      {user?.name || "User"}
+                      {profile?.name || "User"}
                     </div>
                     <div
                       style={{ color: "#94a3b8", fontSize: 12, marginTop: 2 }}
                     >
-                      {user?.email || ""}
+                      {profile?.email || ""}
                     </div>
                   </div>
                   <button

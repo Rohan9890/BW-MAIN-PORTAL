@@ -5,7 +5,6 @@ export { adminApi } from "./adminApi";
 export { dashboardApi } from "./dashboardApi";
 export { appsApi } from "./appsApi";
 export { usersApi } from "./usersApi";
-export { ticketsApi } from "./ticketsApi";
 export { activityApi } from "./activityApi";
 export { profileApi } from "./profileApi";
 export { settingsApi } from "./settingsApi";

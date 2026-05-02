@@ -40,14 +40,15 @@ export const ticketsApi = {
   async updateTicketStatus(ticketId, status) {
     return safeServiceCall({
       request: () =>
-        apiClient.patch(endpoints.tickets.updateStatus(ticketId), { status }),
+        apiClient.put(endpoints.tickets.updateStatus(ticketId), { status }),
       fallback: { success: true, id: ticketId, status },
     });
   },
 
   async addTicketReply(ticketId, message) {
     return safeServiceCall({
-      request: () => apiClient.post(endpoints.tickets.reply(ticketId), message),
+      request: () =>
+        apiClient.post(endpoints.tickets.reply(ticketId), { message, body: message }),
       fallback: { success: true, ticketId, message },
     });
   },

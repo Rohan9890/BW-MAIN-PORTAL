@@ -1,113 +1,96 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import Logo from "../components/Logo";
 import { useBrand } from "../context/BrandContext";
 import "./Login.css";
 import { useAuth } from "../context/AuthContext";
-import { authApi } from "../services/authApi";
+import { authBackend } from "../services/backendApis";
+import { isAuthTokenDebugEnabled } from "../services/apiConfig";
 import { showSuccess, showError } from "../services/toast";
+
+/** Unwrap common backend shapes after `backendJson` envelope peel — trim once here. */
+function extractVerifyOtpToken(data) {
+  if (data == null || typeof data !== "object") return "";
+  const nested =
+    data.data && typeof data.data === "object" ? data.data : null;
+  return String(
+    data.token ??
+      data.jwt ??
+      data.accessToken ??
+      data.access_token ??
+      nested?.token ??
+      nested?.jwt ??
+      nested?.accessToken ??
+      nested?.access_token ??
+      "",
+  ).trim();
+}
+
+function validateEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
+}
+
+function validateOtp(value) {
+  return /^\d{6}$/.test(String(value || "").trim());
+}
 
 export default function Login() {
   const { brand } = useBrand();
-  const { loginWithEmail, loginWithPhoneOtp } = useAuth();
+  const { onLoginSuccess } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
 
-  const [method, setMethod] = useState("email"); // email | phone
   const [otpSent, setOtpSent] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [infoMessage, setInfoMessage] = useState("");
   const [formError, setFormError] = useState("");
-  const [successMessage, setSuccessMessage] = useState("");
   const [fieldErrors, setFieldErrors] = useState({});
+  const [form, setForm] = useState({ email: "", password: "", otp: "" });
 
-  const [form, setForm] = useState({
-    email: "",
-    password: "",
-    phone: "",
-    otp: "",
-  });
-
-  const roleFromEmail = form.email.trim().toLowerCase().includes("admin")
-    ? "admin"
-    : "user";
-
-  const validateEmail = (value) => {
-    const v = String(value || "").trim();
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
-  };
-
-  const normalizePhone = (value) => String(value || "").replace(/\D/g, "");
-  const validatePhone = (value) => {
-    const digits = normalizePhone(value);
-    return digits.length >= 10 && digits.length <= 15;
-  };
-
-  const validateOtp = (value) => {
-    const v = String(value || "").trim();
-    return /^\d{6}$/.test(v);
-  };
-
-  const getLoginErrorMessage = (error) => {
-    const rawMessage =
-      error?.response?.data?.message ||
-      error?.response?.data?.error ||
-      error?.message ||
-      "Invalid email or password";
-    const normalizedMessage = String(rawMessage).toLowerCase();
-
-    if (
-      normalizedMessage.includes("invalid") ||
-      normalizedMessage.includes("bad credentials")
-    ) {
-      return "Wrong password";
+  useEffect(() => {
+    const msg = location.state?.message;
+    if (typeof msg === "string" && msg.trim()) {
+      setInfoMessage(msg.trim());
+      navigate(location.pathname, { replace: true, state: null });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    return rawMessage;
-  };
+  const canSubmitLogin =
+    !loading && validateEmail(form.email) && form.password.trim().length > 0;
 
-  const isEmailValid = validateEmail(form.email);
-  const hasPassword = !!form.password.trim();
-  const emailLoginDisabled = loading || !isEmailValid || !hasPassword;
+  const canSubmitOtp = !loading && validateOtp(form.otp);
 
-  const showSuccessAndNavigate = (role) => {
-    setSuccessMessage(
-      `Signed in successfully as ${role === "admin" ? "Admin" : "User"}.`,
-    );
-    // Let users see the feedback briefly before navigation.
-    setTimeout(() => {
-      navigate(role === "admin" ? "/admin" : "/dashboard");
-    }, 750);
-  };
-
+  // ================= LOGIN (SEND OTP) =================
   const handleEmailLogin = async () => {
     setFormError("");
-    setSuccessMessage("");
     setFieldErrors({});
 
     if (!validateEmail(form.email)) {
       setFieldErrors({ email: "Enter a valid email address." });
       return;
     }
-
     if (!form.password.trim()) {
-      setFieldErrors((prev) => ({
-        ...prev,
-        password: "Password is required.",
-      }));
+      setFieldErrors({ password: "Password is required." });
       return;
     }
 
     setLoading(true);
     try {
-      await authApi.login({
+      await authBackend.login({
         email: form.email.trim(),
         password: form.password,
       });
+
       localStorage.setItem("login_pending_email", form.email.trim());
-      showSuccess("OTP sent to your email. Please verify to continue");
+
+      showSuccess("OTP sent to your email");
       setOtpSent(true);
     } catch (e) {
-      const msg = getLoginErrorMessage(e);
+      const msg = e?.message?.toLowerCase().includes("verify")
+        ? "Please verify your email before login."
+        : e?.message || "Login failed";
       setFormError(msg);
       showError(msg);
     } finally {
@@ -115,9 +98,9 @@ export default function Login() {
     }
   };
 
+  // ================= VERIFY OTP =================
   const handleVerifyEmailOtp = async () => {
     setFormError("");
-    setSuccessMessage("");
     setFieldErrors({});
 
     if (!validateOtp(form.otp)) {
@@ -125,27 +108,64 @@ export default function Login() {
       return;
     }
 
-    const storedEmail =
+    const email =
       localStorage.getItem("login_pending_email") || form.email.trim();
-    const role = storedEmail.toLowerCase().includes("admin") ? "admin" : "user";
 
     setLoading(true);
     try {
-      const response = await authApi.verifyOtp({
-        email: storedEmail,
+      /* OTP must run without a stale JWT — backend rejects with "session expired" otherwise. */
+      localStorage.removeItem("ui-access-token");
+
+      const data = await authBackend.verifyOtp({
+        email,
         otp: form.otp.trim(),
       });
-      const token =
-        response?.token || response?.accessToken || response?.data?.token || "";
-      await loginWithEmail({ email: storedEmail, role });
-      if (token) localStorage.setItem("ui-access-token", token);
-      const userId = response?.userId || response?.user?.id;
-      if (userId) localStorage.setItem("userId", userId);
+      console.log("verify-otp response:", data);
+
+      const token = extractVerifyOtpToken(data);
+      const userId = data?.userId ?? data?.data?.userId ?? "";
+
+      if (!token) throw new Error("Invalid login response");
+
+      if (isAuthTokenDebugEnabled()) {
+        const storedBefore = localStorage.getItem("ui-access-token");
+        console.group("[AUTH DEBUG] verify-otp → token");
+        console.log("response top-level keys:", Object.keys(data || {}));
+        console.log("extracted JWT (exact):", token);
+        console.log("JWT length:", token.length);
+        console.log("token had whitespace-only trim applied:", true);
+        console.log("localStorage ui-access-token before save:", storedBefore);
+        console.groupEnd();
+      }
+
+      await onLoginSuccess({ token, userId });
+
+      if (isAuthTokenDebugEnabled()) {
+        const stored = localStorage.getItem("ui-access-token");
+        console.log("[AUTH DEBUG] after onLoginSuccess — stored === extracted:", stored === token);
+        if (stored !== token) {
+          console.warn("[AUTH DEBUG] token mismatch after save", {
+            extractedLen: token.length,
+            storedLen: stored?.length ?? 0,
+          });
+        }
+      }
+
       localStorage.removeItem("login_pending_email");
+
       showSuccess("Login successful");
-      showSuccessAndNavigate(role);
+      /** Navigate after token + profile hydrate complete — avoids racing global 401 handlers. */
+      navigate("/dashboard");
     } catch (e) {
-      const msg = e?.message || "Invalid OTP";
+      console.log("verify-otp error:", e);
+      const p = e?.payload;
+      const nested =
+        p && typeof p === "object" && typeof p.data === "object" && p.data?.message;
+      const msg =
+        (typeof nested === "string" && nested) ||
+        e?.message ||
+        (p && typeof p === "object" && typeof p.error === "string" && p.error) ||
+        "Invalid OTP";
       setFormError(msg);
       showError(msg);
     } finally {
@@ -153,122 +173,83 @@ export default function Login() {
     }
   };
 
-  const handleSendOtp = async () => {
-    setFormError("");
-    setSuccessMessage("");
-    setFieldErrors({});
-
-    if (!validatePhone(form.phone)) {
-      setFieldErrors({
-        phone: "Enter a valid phone number (10-15 digits).",
-      });
-      return;
-    }
-
-    // Simulate sending OTP.
-    setLoading(true);
-    try {
-      await new Promise((r) => setTimeout(r, 600));
-      setOtpSent(true);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyOtp = async () => {
-    setFormError("");
-    setSuccessMessage("");
-    setFieldErrors({});
-
-    if (!validatePhone(form.phone)) {
-      setFieldErrors({
-        phone: "Enter a valid phone number (10-15 digits).",
-      });
-      return;
-    }
-
-    if (!validateOtp(form.otp)) {
-      setFieldErrors({
-        otp: "OTP must be 6 digits.",
-      });
-      return;
-    }
-
-    setLoading(true);
-    try {
-      // TODO: connect to backend API
-      await loginWithPhoneOtp({
-        phone: form.phone,
-        otp: form.otp,
-        role: roleFromEmail,
-      });
-      showSuccessAndNavigate(roleFromEmail);
-    } catch (e) {
-      setFormError(e?.message || "Unable to verify OTP. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
-    <div className="page-gradient login-page">
-      <div className="login-card card-container">
-        <div className="login-right">
-          <Logo to="/" className="login-brand-logo" />
-          <p className="login-tagline">{brand.description}</p>
+    <div className="login-page">
+      {/* Left Branding Panel */}
+      <aside className="login-left-panel">
+        <div className="login-left-top">
+          <Logo to="/" showText />
         </div>
-        <div className="login-left">
-          <div className="login-welcome">
-            <Logo to="/" className="login-mini-logo" compact={true} />
-            <h1 className="login-welcome-title">Welcome Back!</h1>
-            <div className="login-welcome-sub">Sign in to your account</div>
-          </div>
-
-          <div className="method-tabs-row">
-            <div
-              className="method-tabs"
-              role="tablist"
-              aria-label="Login methods"
-            >
-              <button
-                type="button"
-                className={`method-tab ${method === "email" ? "active" : ""}`}
-                onClick={() => {
-                  setMethod("email");
-                  setOtpSent(false);
-                  setFormError("");
-                  setSuccessMessage("");
-                  setFieldErrors({});
-                }}
-                role="tab"
-                aria-selected={method === "email"}
-              >
-                Email
-              </button>
-              <button
-                type="button"
-                className={`method-tab ${method === "phone" ? "active" : ""}`}
-                onClick={() => {
-                  setMethod("phone");
-                  setOtpSent(false);
-                  setFormError("");
-                  setSuccessMessage("");
-                  setFieldErrors({});
-                }}
-                role="tab"
-                aria-selected={method === "phone"}
-              >
-                Phone
-              </button>
+        <div className="login-left-middle">
+          <h1 className="login-left-title">Welcome Back!</h1>
+          <p className="login-left-desc">
+            Sign in to access your dashboard, manage apps, and stay connected.
+          </p>
+          <div className="login-features">
+            <div className="login-feature-item">
+              <span className="login-feature-icon">🚀</span>
+              <div>
+                <span className="login-feature-label">Fast & Secure</span>
+                <span className="login-feature-sub">
+                  Enterprise-grade security
+                </span>
+              </div>
+            </div>
+            <div className="login-feature-item">
+              <span className="login-feature-icon">📊</span>
+              <div>
+                <span className="login-feature-label">Real-time Dashboard</span>
+                <span className="login-feature-sub">
+                  Monitor your activity live
+                </span>
+              </div>
+            </div>
+            <div className="login-feature-item">
+              <span className="login-feature-icon">🛡️</span>
+              <div>
+                <span className="login-feature-label">KYC Verified</span>
+                <span className="login-feature-sub">
+                  Trusted & compliant platform
+                </span>
+              </div>
             </div>
           </div>
+        </div>
+      </aside>
 
-          {formError && <div className="auth-error">{formError}</div>}
-          {successMessage && (
-            <div className="auth-success">{successMessage}</div>
+      {/* Right Form Panel */}
+      <main className="login-right-panel">
+        <div className="login-form-wrapper">
+          <div className="login-right-header">
+            <h2 className="login-right-title">
+              {otpSent ? "Verify OTP" : "Sign In"}
+            </h2>
+            <p className="login-right-sub">
+              {otpSent
+                ? "Enter the 6-digit OTP sent to your email."
+                : "Enter your credentials to continue."}
+            </p>
+          </div>
+
+          {infoMessage && (
+            <div
+              style={{
+                marginBottom: 14,
+                padding: "12px 14px",
+                borderRadius: 12,
+                background: "#eef2ff",
+                color: "#3730a3",
+                fontSize: 14,
+              }}
+            >
+              {infoMessage}
+            </div>
           )}
 
-          {method === "email" && !otpSent && (
+          {formError && <div className="login-error">{formError}</div>}
+
+          {/* ================= EMAIL + PASSWORD ================= */}
+          {!otpSent && (
             <form
               className="login-form"
               onSubmit={(e) => {
@@ -276,99 +257,103 @@ export default function Login() {
                 handleEmailLogin();
               }}
             >
-              <label className="field-label" htmlFor="login-email">
-                Email
-              </label>
-              <div
-                className={`input-with-icon ${
-                  fieldErrors.email ? "input-invalid" : ""
-                }`}
-              >
-                <span className="input-icon" aria-hidden>
-                  @
-                </span>
-                <input
-                  id="login-email"
-                  type="email"
-                  className="input"
-                  placeholder="you@company.com"
-                  value={form.email}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, email: e.target.value }))
-                  }
-                />
+              <div className="login-input-block">
+                <label className="login-label" htmlFor="login-email">
+                  Email Address
+                </label>
+                <div
+                  className={`login-input-with-icon ${fieldErrors.email ? "login-input-invalid" : ""}`}
+                >
+                  <span className="login-input-icon" aria-hidden>
+                    ✉️
+                  </span>
+                  <input
+                    id="login-email"
+                    type="email"
+                    className="input login-premium-input"
+                    placeholder="you@company.com"
+                    value={form.email}
+                    onChange={(e) =>
+                      setForm((p) => ({ ...p, email: e.target.value }))
+                    }
+                  />
+                </div>
+                {fieldErrors.email && (
+                  <div className="login-field-error">{fieldErrors.email}</div>
+                )}
               </div>
-              {fieldErrors.email && (
-                <div className="field-error">{fieldErrors.email}</div>
-              )}
 
-              <label className="field-label" htmlFor="login-password">
-                Password
-              </label>
-              <div
-                className={`input-with-icon ${
-                  fieldErrors.password ? "input-invalid" : ""
-                }`}
-              >
-                <span className="input-icon" aria-hidden>
-                  🔒
-                </span>
-                <input
-                  id="login-password"
-                  type={showPassword ? "text" : "password"}
-                  className="input"
-                  placeholder="Enter your password"
-                  value={form.password}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, password: e.target.value }))
-                  }
-                />
+              <div className="login-input-block">
+                <label className="login-label" htmlFor="login-password">
+                  Password
+                </label>
+                <div
+                  className={`login-input-with-icon ${fieldErrors.password ? "login-input-invalid" : ""}`}
+                >
+                  <span className="login-input-icon" aria-hidden>
+                    🔒
+                  </span>
+                  <input
+                    id="login-password"
+                    type={showPassword ? "text" : "password"}
+                    className="input login-premium-input"
+                    placeholder="Enter your password"
+                    value={form.password}
+                    onChange={(e) =>
+                      setForm((p) => ({ ...p, password: e.target.value }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="login-password-toggle"
+                    onClick={() => setShowPassword((p) => !p)}
+                    aria-label={
+                      showPassword ? "Hide password" : "Show password"
+                    }
+                  >
+                    {showPassword ? "🙈" : "👁"}
+                  </button>
+                </div>
+                {fieldErrors.password && (
+                  <div className="login-field-error">
+                    {fieldErrors.password}
+                  </div>
+                )}
+              </div>
+
+              <div className="login-options-row">
+                <label className="login-remember">
+                  <input type="checkbox" />
+                  <span>Remember me</span>
+                </label>
                 <button
                   type="button"
-                  className="password-toggle"
-                  onClick={() => setShowPassword((prev) => !prev)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  aria-pressed={showPassword}
+                  className="login-forgot"
+                  onClick={() => navigate("/forgot-password")}
                 >
-                  {showPassword ? "🙈" : "👁"}
+                  Forgot Password?
                 </button>
               </div>
-              {fieldErrors.password && (
-                <div className="field-error">{fieldErrors.password}</div>
-              )}
 
               <button
-                type="button"
-                className="forgot-password"
-                onClick={() => {
-                  // TODO: connect to backend API for real reset flow
-                  alert(
-                    "Forgot password flow is not connected to a backend yet.",
-                  );
-                }}
-              >
-                Forgot Password?
-              </button>
-
-              <button
-                type="button"
-                className="btn btn-primary login-btn"
-                onClick={handleEmailLogin}
-                disabled={emailLoginDisabled}
+                type="submit"
+                className="btn btn-primary login-submit-btn"
+                disabled={!canSubmitLogin}
               >
                 {loading ? (
                   <>
-                    <span className="btn-spinner" aria-hidden />
-                    Logging in...
+                    <span className="login-btn-spinner" aria-hidden />
+                    Sending OTP...
                   </>
                 ) : (
-                  "Login"
+                  "Sign In"
                 )}
               </button>
             </form>
           )}
 
-          {method === "email" && otpSent && (
+          {/* ================= OTP VERIFY ================= */}
+          {otpSent && (
             <form
               className="login-form"
               onSubmit={(e) => {
@@ -376,196 +361,80 @@ export default function Login() {
                 handleVerifyEmailOtp();
               }}
             >
-              <p className="auth-footnote" style={{ marginBottom: "12px" }}>
+              <p className="login-otp-hint">
                 OTP sent to{" "}
                 <strong>
                   {localStorage.getItem("login_pending_email") || form.email}
                 </strong>
               </p>
 
-              <label className="field-label" htmlFor="email-otp">
-                OTP
-              </label>
-              <input
-                id="email-otp"
-                type="text"
-                inputMode="numeric"
-                className={`input ${fieldErrors.otp ? "input-invalid" : ""}`}
-                placeholder="Enter 6-digit OTP"
-                value={form.otp}
-                onChange={(e) =>
-                  setForm((prev) => ({ ...prev, otp: e.target.value }))
-                }
-              />
-              {fieldErrors.otp && (
-                <div className="field-error">{fieldErrors.otp}</div>
-              )}
+              <div className="login-input-block">
+                <label className="login-label" htmlFor="login-otp">
+                  OTP
+                </label>
+                <div
+                  className={`login-input-with-icon ${fieldErrors.otp ? "login-input-invalid" : ""}`}
+                >
+                  <span className="login-input-icon" aria-hidden>
+                    🔑
+                  </span>
+                  <input
+                    id="login-otp"
+                    type="text"
+                    inputMode="numeric"
+                    className="input login-premium-input"
+                    placeholder="Enter 6-digit OTP"
+                    value={form.otp}
+                    onChange={(e) =>
+                      setForm((p) => ({ ...p, otp: e.target.value }))
+                    }
+                  />
+                </div>
+                {fieldErrors.otp && (
+                  <div className="login-field-error">{fieldErrors.otp}</div>
+                )}
+              </div>
 
               <button
-                type="button"
-                className="btn btn-primary login-btn"
-                onClick={handleVerifyEmailOtp}
-                disabled={loading}
+                type="submit"
+                className="btn btn-primary login-submit-btn"
+                disabled={!canSubmitOtp}
               >
-                {loading ? "Verifying..." : "Verify & Login"}
+                {loading ? (
+                  <>
+                    <span className="login-btn-spinner" aria-hidden />
+                    Verifying...
+                  </>
+                ) : (
+                  "Verify & Login"
+                )}
               </button>
 
               <button
                 type="button"
-                className="btn btn-primary btn-ghost login-btn login-ghost-btn"
+                className="login-change-email-btn"
                 onClick={() => {
                   setOtpSent(false);
-                  setForm((prev) => ({ ...prev, otp: "" }));
+                  setForm((p) => ({ ...p, otp: "" }));
                   setFieldErrors({});
                   setFormError("");
                   localStorage.removeItem("login_pending_email");
                 }}
                 disabled={loading}
               >
-                Change email
+                ← Change email
               </button>
             </form>
           )}
 
-          {method === "phone" && (
-            <form
-              className="login-form"
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!otpSent) handleSendOtp();
-                else handleVerifyOtp();
-              }}
-            >
-              <label className="field-label" htmlFor="role-email-phone">
-                Email (optional for role)
-              </label>
-              <div className="input-with-icon">
-                <span className="input-icon" aria-hidden>
-                  @
-                </span>
-                <input
-                  id="role-email-phone"
-                  type="email"
-                  className="input"
-                  placeholder="you@company.com"
-                  value={form.email}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, email: e.target.value }))
-                  }
-                />
-              </div>
-
-              <label className="field-label" htmlFor="login-phone">
-                Phone number
-              </label>
-              <div
-                className={`input-with-icon ${
-                  fieldErrors.phone ? "input-invalid" : ""
-                }`}
-              >
-                <span className="input-icon" aria-hidden>
-                  ☎
-                </span>
-                <input
-                  id="login-phone"
-                  type="tel"
-                  className="input"
-                  placeholder="Enter phone number"
-                  value={form.phone}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, phone: e.target.value }))
-                  }
-                />
-              </div>
-              {fieldErrors.phone && (
-                <div className="field-error">{fieldErrors.phone}</div>
-              )}
-
-              {!otpSent ? (
-                <button
-                  type="button"
-                  className="btn btn-secondary login-btn"
-                  onClick={handleSendOtp}
-                  disabled={loading}
-                >
-                  {loading ? "Sending OTP..." : "Send OTP"}
-                </button>
-              ) : (
-                <>
-                  <label className="field-label" htmlFor="login-otp">
-                    OTP
-                  </label>
-                  <input
-                    id="login-otp"
-                    type="text"
-                    inputMode="numeric"
-                    className={`input ${fieldErrors.otp ? "input-invalid" : ""}`}
-                    placeholder="Enter 6-digit OTP"
-                    value={form.otp}
-                    onChange={(e) =>
-                      setForm((prev) => ({ ...prev, otp: e.target.value }))
-                    }
-                  />
-                  {fieldErrors.otp && (
-                    <div className="field-error">{fieldErrors.otp}</div>
-                  )}
-
-                  <button
-                    type="button"
-                    className="btn btn-secondary login-btn"
-                    onClick={handleVerifyOtp}
-                    disabled={loading}
-                  >
-                    {loading ? "Verifying..." : "Verify & login"}
-                  </button>
-
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-ghost login-btn login-ghost-btn"
-                    onClick={() => {
-                      setOtpSent(false);
-                      setForm((prev) => ({ ...prev, otp: "" }));
-                      setFieldErrors({});
-                      setFormError("");
-                    }}
-                    disabled={loading}
-                  >
-                    Change phone
-                  </button>
-                </>
-              )}
-
-              <div className="auth-footnote">
-                Demo tip: any 6-digit OTP works.
-              </div>
-            </form>
-          )}
-
-          <div className="auth-divider">OR continue with</div>
-          <div className="social-login-rows">
-            <button
-              type="button"
-              className="social-row"
-              onClick={() => setMethod("phone")}
-            >
-              <span className="social-icon-box" aria-hidden>
-                ☎
-              </span>
-              <span className="social-label">Login with OTP</span>
-            </button>
-          </div>
-          <div className="auth-footnote">
-            Email login connected. OTP verification in progress.
-          </div>
-
-          <p className="signup-prompt">
+          <p className="login-signup-prompt">
             Don't have an account?{" "}
-            <Link to="/register" className="btn btn-primary btn-signup">
+            <Link to="/register" className="login-signup-link">
               Sign Up
             </Link>
           </p>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

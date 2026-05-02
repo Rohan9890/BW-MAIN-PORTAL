@@ -1,13 +1,7 @@
-import { apiClient } from "./apiClient";
-import { endpoints } from "./endpoints";
-import { mockData } from "./mockData";
-import { safeServiceCall } from "./serviceUtils";
+import { backendJson } from "./backendClient";
 
 export const plansApi = {
   async getPlans() {
-    return safeServiceCall({
-      request: () => apiClient.get(endpoints.plans.all),
-      fallback: mockData.plans,
-    });
+    return backendJson("/plans");
   },
 };

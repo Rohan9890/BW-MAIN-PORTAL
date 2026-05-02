@@ -1,22 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
-import { mockData } from "../services/mockData";
-
-const STORAGE_KEY = "bold-wise-allapps";
-
-const formatFavoriteDate = () =>
-  new Date().toLocaleDateString("en-CA", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  appBackend,
+  applicationBackend,
+  favoritesBackend,
+} from "../services/backendApis";
+import { showError, showSuccess } from "../services/toast";
+import { emitMyAppsChanged } from "../services/uiEvents";
+import "./AllApps.css";
 
 const normalizeApps = (items) =>
-  (Array.isArray(items) ? items : []).map((app, index) => ({
-    ...app,
-    id: app.id ?? index + 1,
-    rating: app.rating ?? 4,
-    favoritedDate: app.favoritedDate ?? null,
-    detail: app.detail || app.description,
+  (Array.isArray(items) ? items : []).map((app) => ({
+    appId: app.appId,
+    appType: app.appType,
+    name: app.appName,
+    description: app.appText || "—",
+    detail: app.appText || "—",
+    appUrl: app.appUrl,
+    appLogo: app.appLogo,
+    status: String(app.status || "").toLowerCase(),
+    createdAt: app.createdAt,
   }));
 
 export default function AllApps() {
@@ -24,37 +26,85 @@ export default function AllApps() {
   const [apps, setApps] = useState([]);
   const [selectedId, setSelectedId] = useState(null);
   const [viewMode, setViewMode] = useState("grid");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [favoriteIds, setFavoriteIds] = useState(() => new Set());
+  const [myAppIds, setMyAppIds] = useState(() => new Set());
+  const [ctaLoadingId, setCtaLoadingId] = useState(null);
+  const [ctaSuccessId, setCtaSuccessId] = useState(null);
+  const ctaDebugLoggedRef = useRef(new Set());
+  const ctaSuccessTimerRef = useRef(null);
 
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-
-    if (stored) {
-      try {
-        const parsed = JSON.parse(stored);
-        const normalized = normalizeApps(parsed);
-        setApps(normalized);
-        setSelectedId(normalized[0]?.id ?? null);
-        return;
-      } catch (error) {
-        console.warn("Failed parsing saved apps", error);
-      }
-    }
-
-    const fallbackApps = normalizeApps(mockData.appCatalog.allApps);
-    setApps(fallbackApps);
-    setSelectedId(fallbackApps[0]?.id ?? null);
+    return () => {
+      if (ctaSuccessTimerRef.current) window.clearTimeout(ctaSuccessTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
-    if (apps.length) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(apps));
-    }
-  }, [apps]);
+    let active = true;
+    (async () => {
+      setLoading(true);
+      setError("");
+      try {
+        const [list, favs, mine] = await Promise.all([
+          applicationBackend.list(),
+          favoritesBackend.list().catch(() => []),
+          applicationBackend.my().catch(() => []),
+        ]);
+        if (!active) return;
+        if (import.meta.env.DEV) {
+          const sample = Array.isArray(list) ? list.slice(0, 5) : [];
+          console.info(
+            "[AllApps] /application/list sample keys",
+            sample.map((x) => Object.keys(x || {}).sort()),
+          );
+          console.info(
+            "[AllApps] /application/list sample",
+            sample.map((x) => ({
+              appId: x?.appId,
+              appName: x?.appName,
+              appType: x?.appType,
+              status: x?.status,
+              appUrl: x?.appUrl,
+            })),
+          );
+        }
+        const normalized = normalizeApps(list);
+        setApps(normalized);
+        setSelectedId(normalized[0]?.appId ?? null);
+
+        const favIds = new Set(
+          (Array.isArray(favs) ? favs : [])
+            .map((x) => x?.appId ?? x?.id ?? x)
+            .filter((v) => v !== undefined && v !== null)
+            .map((v) => Number(v)),
+        );
+        setFavoriteIds(favIds);
+
+        const mineIds = new Set(
+          (Array.isArray(mine) ? mine : [])
+            .map((x) => x?.id ?? x?.appId)
+            .filter((v) => v !== undefined && v !== null)
+            .map((v) => Number(v)),
+        );
+        setMyAppIds(mineIds);
+      } catch (e) {
+        if (!active) return;
+        setError(e?.message || "Unable to load apps.");
+      } finally {
+        if (active) setLoading(false);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const filteredApps = useMemo(
     () =>
       apps.filter((app) =>
-        `${app.name} ${app.category} ${app.description} ${app.status}`
+        `${app.name} ${app.appType} ${app.description} ${app.status}`
           .toLowerCase()
           .includes(search.trim().toLowerCase()),
       ),
@@ -67,34 +117,89 @@ export default function AllApps() {
       return;
     }
 
-    if (!filteredApps.some((app) => app.id === selectedId)) {
-      setSelectedId(filteredApps[0].id);
+    if (!filteredApps.some((app) => app.appId === selectedId)) {
+      setSelectedId(filteredApps[0].appId);
     }
   }, [filteredApps, selectedId]);
 
-  const selectedApp = filteredApps.find((app) => app.id === selectedId) || null;
+  const selectedApp =
+    filteredApps.find((app) => app.appId === selectedId) || null;
 
-  const toggleSubscribe = (id) => {
-    setApps((prev) =>
-      prev.map((app) =>
-        app.id === id ? { ...app, subscribed: !app.subscribed } : app,
-      ),
-    );
+  const toggleFavorite = async (appId) => {
+    const next = new Set(favoriteIds);
+    const wasFav = next.has(Number(appId));
+    if (wasFav) next.delete(Number(appId));
+    else next.add(Number(appId));
+    setFavoriteIds(next);
+    try {
+      if (wasFav) await favoritesBackend.remove(appId);
+      else await favoritesBackend.add(appId);
+      showSuccess(wasFav ? "Removed from favorites" : "Added to favorites");
+    } catch (e) {
+      // Revert on error.
+      setFavoriteIds(new Set(favoriteIds));
+      showError(e?.message || "Unable to update favorites");
+    }
   };
 
-  const toggleWishlist = (id) => {
-    setApps((prev) =>
-      prev.map((app) => {
-        if (app.id !== id) return app;
+  const handleOpen = async (app) => {
+    const appId = app?.appId;
+    const url = String(app?.appUrl || "").trim();
+    if (!appId || !url) return;
+    // Open should always work; backend call is best-effort.
+    window.open(url, "_blank", "noopener,noreferrer");
+    applicationBackend.open(appId).catch(() => {});
+  };
 
-        const nextWishlisted = !app.wishlisted;
-        return {
-          ...app,
-          wishlisted: nextWishlisted,
-          favoritedDate: nextWishlisted ? formatFavoriteDate() : null,
-        };
-      }),
-    );
+  const handleSubscribe = async (app) => {
+    const appId = app?.appId;
+    if (!appId) return;
+    setCtaLoadingId(Number(appId));
+    try {
+      await appBackend.apply(appId);
+      const id = Number(appId);
+      setMyAppIds((prev) => new Set(prev).add(id));
+      emitMyAppsChanged();
+
+      setCtaSuccessId(id);
+      if (ctaSuccessTimerRef.current) window.clearTimeout(ctaSuccessTimerRef.current);
+      ctaSuccessTimerRef.current = window.setTimeout(() => setCtaSuccessId(null), 900);
+
+      showSuccess("Added to My Apps");
+    } catch (e) {
+      showError(e?.message || "Unable to add to My Apps");
+    } finally {
+      setCtaLoadingId(null);
+    }
+  };
+
+  const getCta = (app) => {
+    const id = Number(app?.appId);
+    const owned = myAppIds.has(id);
+    if (owned) return { kind: "open", label: "Open", tone: "primary" };
+
+    return { kind: "subscribe", label: "Subscribe", tone: "accent" };
+  };
+
+  const runCta = async (app) => {
+    const cta = getCta(app);
+    if (import.meta.env.DEV) {
+      const id = Number(app?.appId);
+      if (Number.isFinite(id) && !ctaDebugLoggedRef.current.has(id)) {
+        ctaDebugLoggedRef.current.add(id);
+        console.info("[AllApps CTA]", {
+          appId: id,
+          name: app?.name,
+          appType: app?.appType,
+          status: app?.status,
+          appUrl: app?.appUrl,
+          owned: myAppIds.has(id),
+          decision: cta,
+        });
+      }
+    }
+    if (cta.kind === "open") return handleOpen(app);
+    return handleSubscribe(app);
   };
 
   const renderStatus = (status) => ({
@@ -137,6 +242,12 @@ export default function AllApps() {
           padding: 18,
         }}
       >
+        {loading ? (
+          <div style={{ padding: 18, color: "#64748b" }}>Loading apps...</div>
+        ) : error ? (
+          <div style={{ padding: 18, color: "#b91c1c" }}>{error}</div>
+        ) : null}
+
         <div
           className="all-apps-toolbar"
           style={{
@@ -230,23 +341,24 @@ export default function AllApps() {
           >
             {filteredApps.map((app) => {
               const statusTone = renderStatus(app.status);
+              const isFav = favoriteIds.has(Number(app.appId));
 
               return (
                 <div
-                  key={app.id}
-                  onClick={() => setSelectedId(app.id)}
+                  key={app.appId}
+                  onClick={() => setSelectedId(app.appId)}
                   style={{
                     border:
-                      app.id === selectedId
+                      app.appId === selectedId
                         ? "2px solid #2563eb"
                         : "1px solid #e2e8f0",
-                    background: app.id === selectedId ? "#f0f7ff" : "#fff",
+                    background: app.appId === selectedId ? "#f0f7ff" : "#fff",
                     borderRadius: 12,
                     padding: 14,
                     cursor: "pointer",
                     transition: "transform 0.18s ease, box-shadow 0.18s ease",
                     boxShadow:
-                      app.id === selectedId
+                      app.appId === selectedId
                         ? "0 10px 20px rgba(37,99,235,0.08)"
                         : "none",
                   }}
@@ -262,23 +374,23 @@ export default function AllApps() {
                     <button
                       type="button"
                       aria-label={
-                        app.wishlisted
+                        isFav
                           ? "Remove from favorites"
                           : "Add to favorites"
                       }
                       style={{
                         border: "none",
                         background: "transparent",
-                        color: app.wishlisted ? "#ef4444" : "#94a3b8",
+                        color: isFav ? "#ef4444" : "#94a3b8",
                         fontSize: 18,
                         cursor: "pointer",
                       }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        toggleWishlist(app.id);
+                        void toggleFavorite(app.appId);
                       }}
                     >
-                      {app.wishlisted ? "★" : "☆"}
+                      {isFav ? "♥" : "♡"}
                     </button>
                   </div>
 
@@ -308,7 +420,7 @@ export default function AllApps() {
                     {app.description}
                   </p>
                   <div style={{ fontSize: 12, color: "#64748b" }}>
-                    {app.category}
+                    {app.appType}
                   </div>
 
                   <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -316,19 +428,16 @@ export default function AllApps() {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        toggleSubscribe(app.id);
+                        void runCta(app);
                       }}
-                      style={{
-                        border: "none",
-                        borderRadius: 8,
-                        backgroundColor: app.subscribed ? "#f97316" : "#2563eb",
-                        color: "#fff",
-                        padding: "8px 12px",
-                        cursor: "pointer",
-                        fontWeight: 600,
-                      }}
+                      className={`aa-cta aa-cta--${getCta(app).tone} ${ctaSuccessId === Number(app.appId) ? "is-success" : ""}`}
+                      disabled={ctaLoadingId === Number(app.appId)}
                     >
-                      {app.subscribed ? "Unsubscribe" : "Subscribe"}
+                      {ctaLoadingId === Number(app.appId)
+                        ? "Subscribing..."
+                        : ctaSuccessId === Number(app.appId)
+                          ? "Added"
+                          : getCta(app).label}
                     </button>
                   </div>
                 </div>
@@ -345,14 +454,14 @@ export default function AllApps() {
           <div style={{ display: "grid", gap: 12 }}>
             {filteredApps.map((app) => (
               <div
-                key={app.id}
-                onClick={() => setSelectedId(app.id)}
+                key={app.appId}
+                onClick={() => setSelectedId(app.appId)}
                 style={{
                   border:
-                    app.id === selectedId
+                    app.appId === selectedId
                       ? "2px solid #2563eb"
                       : "1px solid #e2e8f0",
-                  background: app.id === selectedId ? "#f0f7ff" : "#fff",
+                  background: app.appId === selectedId ? "#f0f7ff" : "#fff",
                   borderRadius: 12,
                   padding: 16,
                   cursor: "pointer",
@@ -378,7 +487,7 @@ export default function AllApps() {
                         fontSize: 13,
                       }}
                     >
-                      {app.category}
+                      {app.appType}
                     </p>
                   </div>
 
@@ -387,37 +496,40 @@ export default function AllApps() {
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        toggleWishlist(app.id);
+                        void toggleFavorite(app.appId);
                       }}
                       style={{
                         border: "1px solid #fecaca",
-                        background: app.wishlisted ? "#fff1f2" : "#fff",
-                        color: app.wishlisted ? "#dc2626" : "#64748b",
+                        background: favoriteIds.has(Number(app.appId))
+                          ? "#fff1f2"
+                          : "#fff",
+                        color: favoriteIds.has(Number(app.appId))
+                          ? "#dc2626"
+                          : "#64748b",
                         borderRadius: 8,
                         padding: "8px 12px",
                         cursor: "pointer",
                         fontWeight: 600,
                       }}
                     >
-                      {app.wishlisted ? "Wishlisted" : "Add to Wishlist"}
+                      {favoriteIds.has(Number(app.appId))
+                        ? "Favorited"
+                        : "Add to Favorites"}
                     </button>
                     <button
                       type="button"
                       onClick={(e) => {
                         e.stopPropagation();
-                        toggleSubscribe(app.id);
+                        void runCta(app);
                       }}
-                      style={{
-                        border: "none",
-                        borderRadius: 8,
-                        backgroundColor: app.subscribed ? "#f97316" : "#2563eb",
-                        color: "#fff",
-                        padding: "8px 14px",
-                        cursor: "pointer",
-                        fontWeight: 600,
-                      }}
+                      className={`aa-cta aa-cta--${getCta(app).tone} ${ctaSuccessId === Number(app.appId) ? "is-success" : ""}`}
+                      disabled={ctaLoadingId === Number(app.appId)}
                     >
-                      {app.subscribed ? "Unsubscribe" : "Subscribe"}
+                      {ctaLoadingId === Number(app.appId)
+                        ? "Subscribing..."
+                        : ctaSuccessId === Number(app.appId)
+                          ? "Added"
+                          : getCta(app).label}
                     </button>
                   </div>
                 </div>
@@ -452,11 +564,17 @@ export default function AllApps() {
                       padding: "8px 12px",
                       fontSize: 12,
                       fontWeight: 700,
-                      background: app.subscribed ? "#dbeafe" : "#f1f5f9",
-                      color: app.subscribed ? "#1d4ed8" : "#475569",
+                      background: favoriteIds.has(Number(app.appId))
+                        ? "#fee2e2"
+                        : "#f1f5f9",
+                      color: favoriteIds.has(Number(app.appId))
+                        ? "#991b1b"
+                        : "#475569",
                     }}
                   >
-                    {app.subscribed ? "Subscribed" : "Not Subscribed"}
+                    {favoriteIds.has(Number(app.appId))
+                      ? "Favorited"
+                      : "Not Favorited"}
                   </span>
                 </div>
               </div>
@@ -485,21 +603,54 @@ export default function AllApps() {
             </p>
             <div style={{ marginTop: 16, fontSize: 13, color: "#64748b" }}>
               <p style={{ margin: "8px 0" }}>
-                <strong>Category:</strong> {selectedApp.category}
+                <strong>Category:</strong> {selectedApp.appType}
               </p>
               <p style={{ margin: "8px 0" }}>
                 <strong>Status:</strong> {selectedApp.status}
               </p>
               <p style={{ margin: "8px 0" }}>
-                <strong>Subscription:</strong>{" "}
-                {selectedApp.subscribed ? "Active" : "Not Subscribed"}
+                <strong>Favorite:</strong>{" "}
+                {favoriteIds.has(Number(selectedApp.appId))
+                  ? "Yes"
+                  : "No"}
               </p>
-              <p style={{ margin: "8px 0" }}>
-                <strong>Wishlist:</strong>{" "}
-                {selectedApp.wishlisted
-                  ? `Added on ${selectedApp.favoritedDate}`
-                  : "Not wishlisted"}
-              </p>
+              <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  onClick={() => void toggleFavorite(selectedApp.appId)}
+                  style={{
+                    border: "1px solid #fecaca",
+                    background: favoriteIds.has(Number(selectedApp.appId))
+                      ? "#fff1f2"
+                      : "#fff",
+                    color: favoriteIds.has(Number(selectedApp.appId))
+                      ? "#dc2626"
+                      : "#64748b",
+                    borderRadius: 10,
+                    padding: "10px 12px",
+                    cursor: "pointer",
+                    fontWeight: 800,
+                  }}
+                >
+                  {favoriteIds.has(Number(selectedApp.appId))
+                    ? "Remove Favorite"
+                    : "Add to Favorites"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void runCta(selectedApp)}
+                  className={`aa-cta aa-cta--${getCta(selectedApp).tone} ${ctaSuccessId === Number(selectedApp.appId) ? "is-success" : ""}`}
+                  disabled={ctaLoadingId === Number(selectedApp.appId)}
+                >
+                  {ctaLoadingId === Number(selectedApp.appId)
+                    ? "Subscribing..."
+                    : getCta(selectedApp).kind === "open"
+                      ? "Open App"
+                      : ctaSuccessId === Number(selectedApp.appId)
+                        ? "Added"
+                        : getCta(selectedApp).label}
+                </button>
+              </div>
             </div>
           </>
         ) : (

@@ -1,14 +1,7 @@
-import { apiClient } from "./apiClient";
-import { endpoints } from "./endpoints";
-import { mockData } from "./mockData";
-import { safeServiceCall } from "./serviceUtils";
+import { activityBackend } from "./backendApis";
 
 export const activityApi = {
   async getActivity(params) {
-    return safeServiceCall({
-      request: () =>
-        apiClient.get(endpoints.dashboard.activity, { query: params }),
-      fallback: mockData.activity,
-    });
+    return activityBackend.list(params ?? { page: 0, size: 10 });
   },
 };

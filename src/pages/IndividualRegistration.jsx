@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Logo from "../components/Logo";
+import { buildApiRequestUrl } from "../services/apiConfig";
 import "./Registration.css";
 
-const REGISTER_URL = "http://43.205.116.38:8080/api/v1.0/register";
+const REGISTER_URL = buildApiRequestUrl("/register");
 
 const INDIVIDUAL_FIELDS = [
   { name: "fullName", placeholder: "Full Name", col: "left" },
@@ -246,6 +247,7 @@ export default function IndividualRegistration() {
       const response = await fetch(REGISTER_URL, {
         method: "POST",
         body: payload,
+        credentials: "include",
       });
 
       const result = await response.json().catch(() => ({}));

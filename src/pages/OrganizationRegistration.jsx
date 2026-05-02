@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Logo from "../components/Logo";
 import "./Registration.css";
+import { buildApiRequestUrl } from "../services/apiConfig";
 
-const REGISTER_URL = "http://43.205.116.38:8080/api/v1.0/register";
+const REGISTER_URL = buildApiRequestUrl("/register");
 
 const ORG_FIELDS = [
   { name: "orgName", placeholder: "Organization Name", col: "left" },
@@ -259,6 +260,7 @@ export default function OrganizationRegistration() {
       const response = await fetch(REGISTER_URL, {
         method: "POST",
         body: payload,
+        credentials: "include",
       });
 
       const result = await response.json().catch(() => ({}));

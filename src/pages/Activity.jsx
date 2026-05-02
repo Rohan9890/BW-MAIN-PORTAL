@@ -1,11 +1,48 @@
 import { useEffect, useState } from "react";
-import { activityApi } from "../services";
+import { activityBackend } from "../services/backendApis";
+import { PageEmpty, PageError, PageLoading } from "../components/PageStates";
+
+const PAGE_SIZE = 10;
+
+function normalizeActivityResponse(pageRes, pageIndex) {
+  let rawList = [];
+  if (Array.isArray(pageRes)) rawList = pageRes;
+  else if (Array.isArray(pageRes?.content)) rawList = pageRes.content;
+  else if (Array.isArray(pageRes?.data)) rawList = pageRes.data;
+  else if (Array.isArray(pageRes?.items)) rawList = pageRes.items;
+
+  const list = rawList.map((a, idx) => ({
+    id: a.id ?? `${pageIndex}-${idx}`,
+    type: a.type || a.category || "update",
+    title: a.title || a.event || a.action || "Activity",
+    description: a.description || a.message || a.details || "",
+    timestamp: a.timestamp || a.createdAt || a.at || new Date().toISOString(),
+    status: a.status || "info",
+  }));
+
+  let totalPages = Number(pageRes?.totalPages);
+  if (!Number.isFinite(totalPages) || totalPages < 1) {
+    const te = pageRes?.totalElements ?? pageRes?.total ?? pageRes?.count;
+    if (te !== undefined && te !== null && Number.isFinite(Number(te))) {
+      totalPages = Math.max(1, Math.ceil(Number(te) / PAGE_SIZE));
+    } else if (rawList.length < PAGE_SIZE) {
+      totalPages = Math.max(1, pageIndex + 1);
+    } else {
+      totalPages = pageIndex + 2;
+    }
+  }
+
+  return { list, totalPages: Math.max(1, totalPages) };
+}
 
 export default function Activity() {
   const [filter, setFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activities, setActivities] = useState([]);
+  const [page, setPage] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -14,9 +51,12 @@ export default function Activity() {
       setLoading(true);
       setError("");
       try {
-        const list = await activityApi.getActivity();
+        const pageRes = await activityBackend.list({ page, size: PAGE_SIZE });
+        const { list, totalPages: tp } = normalizeActivityResponse(pageRes, page);
+
         if (!isMounted) return;
-        setActivities(Array.isArray(list) ? list : []);
+        setActivities(list);
+        setTotalPages(tp);
       } catch (serviceError) {
         if (!isMounted) return;
         setError(serviceError?.message || "Unable to load activity.");
@@ -32,7 +72,7 @@ export default function Activity() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [page, reloadNonce]);
 
   const filteredActivities = activities.filter((activity) => {
     if (filter === "all") return true;
@@ -69,70 +109,91 @@ export default function Activity() {
   };
 
   if (loading) {
-    return (
-      <div style={{ padding: 24, textAlign: "center", color: "#64748b" }}>
-        Loading activity...
-      </div>
-    );
+    return <PageLoading title="Loading activity..." />;
   }
 
   if (error) {
     return (
-      <div style={{ padding: 24, textAlign: "center", color: "#b91c1c" }}>
-        {error}
-      </div>
+      <PageError
+        message={error}
+        onRetry={() => {
+          setReloadNonce((n) => n + 1);
+        }}
+      />
     );
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 800, margin: "0 auto" }}>
+    <div className="activity-page-root" style={{ padding: 24, maxWidth: 880, margin: "0 auto" }}>
       <style>{`
         @media (max-width: 768px) {
-          .activity-container { padding: 16px !important; }
-          h1 { font-size: 24px !important; }
-          .activity-controls { flex-direction: column !important; }
-          select { width: 100% !important; }
+          .activity-page-root { padding: 16px !important; }
+          .activity-page-root h1 { font-size: 24px !important; }
+          .activity-controls { flex-direction: column !important; align-items: stretch !important; }
+          .activity-controls select { width: 100% !important; }
           .summary-grid { grid-template-columns: repeat(2, 1fr) !important; }
         }
         @media (max-width: 480px) {
-          .activity-container { padding: 12px !important; }
-          h1 { font-size: 20px !important; }
+          .activity-page-root { padding: 12px !important; }
+          .activity-page-root h1 { font-size: 20px !important; }
           .activity-controls { gap: 12px !important; }
           .activity-item { flex-direction: column !important; gap: 8px !important; }
           .summary-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
-      <h1 style={{ marginBottom: 24, fontSize: 32 }}>Activity Log</h1>
+      <h1
+        style={{
+          marginBottom: 8,
+          fontSize: 30,
+          letterSpacing: "-0.4px",
+          color: "#0f172a",
+          fontWeight: 950,
+        }}
+      >
+        Activity
+      </h1>
+      <p style={{ margin: "0 0 22px", color: "#64748b", fontSize: 14, fontWeight: 650 }}>
+        Account timeline from the server, paginated for faster loads.
+      </p>
 
       <div
         style={{
-          background: "#fff",
-          borderRadius: 14,
-          padding: 24,
-          marginBottom: 20,
-          boxShadow: "0 4px 14px rgba(15,23,42,0.08)",
+          background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
+          borderRadius: 16,
+          padding: 22,
+          marginBottom: 18,
+          border: "1px solid rgba(37,99,235,0.12)",
+          boxShadow: "0 12px 36px rgba(15,23,42,0.08)",
         }}
       >
         <div
+          className="activity-controls"
           style={{
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            marginBottom: 20,
+            marginBottom: 18,
+            gap: 14,
+            flexWrap: "wrap",
           }}
         >
-          <h2 style={{ margin: 0, fontSize: 20 }}>Recent Activities</h2>
+          <h2 style={{ margin: 0, fontSize: 17, fontWeight: 950, color: "#0f172a" }}>
+            Recent events
+          </h2>
           <select
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             style={{
-              padding: "8px 12px",
-              border: "1px solid #cbd5e1",
-              borderRadius: 8,
+              padding: "10px 14px",
+              border: "1px solid rgba(148,163,184,0.35)",
+              borderRadius: 12,
               outline: "none",
+              fontWeight: 700,
+              background: "#fff",
+              minWidth: 200,
             }}
           >
-            <option value="all">All Activities</option>
+            <option value="all">All activities</option>
             <option value="subscription">Subscriptions</option>
             <option value="login">Logins</option>
             <option value="payment">Payments</option>
@@ -141,42 +202,54 @@ export default function Activity() {
           </select>
         </div>
 
-        <div style={{ display: "grid", gap: 16 }}>
+        <div style={{ display: "grid", gap: 12 }}>
           {filteredActivities.map((activity) => (
             <div
               key={activity.id}
+              className="activity-item"
               style={{
                 display: "flex",
                 alignItems: "flex-start",
-                gap: 16,
+                gap: 14,
                 padding: 16,
-                border: "1px solid #e2e8f0",
-                borderRadius: 10,
-                background: "#fafafa",
+                border: "1px solid rgba(148,163,184,0.2)",
+                borderRadius: 14,
+                background: "rgba(255,255,255,0.85)",
               }}
             >
               <div
                 style={{
-                  width: 12,
-                  height: 12,
+                  width: 11,
+                  height: 11,
                   borderRadius: "50%",
                   background: getStatusColor(activity.status),
                   flexShrink: 0,
-                  marginTop: 4,
+                  marginTop: 5,
+                  boxShadow: `0 0 0 3px ${getStatusColor(activity.status)}22`,
                 }}
               />
-              <div style={{ flex: 1 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
                 <h3
-                  style={{ margin: "0 0 4px", fontSize: 16, color: "#0f172a" }}
+                  style={{
+                    margin: "0 0 4px",
+                    fontSize: 15,
+                    color: "#0f172a",
+                    fontWeight: 900,
+                  }}
                 >
                   {activity.title}
                 </h3>
                 <p
-                  style={{ margin: "0 0 8px", color: "#64748b", fontSize: 14 }}
+                  style={{
+                    margin: "0 0 8px",
+                    color: "#64748b",
+                    fontSize: 13.5,
+                    lineHeight: 1.5,
+                  }}
                 >
                   {activity.description}
                 </p>
-                <small style={{ color: "#94a3b8" }}>
+                <small style={{ color: "#94a3b8", fontWeight: 700, fontSize: 12 }}>
                   {formatTimestamp(activity.timestamp)}
                 </small>
               </div>
@@ -185,82 +258,124 @@ export default function Activity() {
         </div>
 
         {filteredActivities.length === 0 && (
-          <p style={{ textAlign: "center", color: "#64748b", marginTop: 20 }}>
-            No activities found for the selected filter.
-          </p>
+          <PageEmpty
+            title="No activities match this filter."
+            subtitle="Try “All activities” or check another page."
+          />
         )}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginTop: 18,
+            gap: 12,
+            flexWrap: "wrap",
+            paddingTop: 14,
+            borderTop: "1px solid rgba(148,163,184,0.16)",
+          }}
+        >
+          <div style={{ color: "#64748b", fontSize: 13, fontWeight: 750 }}>
+            Page {page + 1} of {totalPages}
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              disabled={page <= 0}
+              style={{
+                border: "1px solid rgba(37,99,235,0.2)",
+                background: page <= 0 ? "#f8fafc" : "#eff6ff",
+                color: "#1d4ed8",
+                padding: "9px 16px",
+                borderRadius: 12,
+                cursor: page <= 0 ? "not-allowed" : "pointer",
+                fontWeight: 850,
+                opacity: page <= 0 ? 0.55 : 1,
+              }}
+            >
+              Previous
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+              disabled={page >= totalPages - 1}
+              style={{
+                border: "1px solid rgba(37,99,235,0.2)",
+                background: page >= totalPages - 1 ? "#f8fafc" : "#eff6ff",
+                color: "#1d4ed8",
+                padding: "9px 16px",
+                borderRadius: 12,
+                cursor: page >= totalPages - 1 ? "not-allowed" : "pointer",
+                fontWeight: 850,
+                opacity: page >= totalPages - 1 ? 0.55 : 1,
+              }}
+            >
+              Next
+            </button>
+          </div>
+        </div>
       </div>
 
       <div
         style={{
-          background: "#fff",
-          borderRadius: 14,
-          padding: 24,
-          boxShadow: "0 4px 14px rgba(15,23,42,0.08)",
+          background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
+          borderRadius: 16,
+          padding: 22,
+          border: "1px solid rgba(37,99,235,0.12)",
+          boxShadow: "0 12px 36px rgba(15,23,42,0.06)",
         }}
       >
-        <h2 style={{ margin: "0 0 20px", fontSize: 20 }}>Activity Summary</h2>
+        <h2 style={{ margin: "0 0 18px", fontSize: 17, fontWeight: 950, color: "#0f172a" }}>
+          Quick summary (this page)
+        </h2>
         <div
+          className="summary-grid"
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-            gap: 16,
+            gap: 12,
           }}
         >
-          <div
-            style={{
-              textAlign: "center",
-              padding: 16,
-              border: "1px solid #e2e8f0",
-              borderRadius: 10,
-            }}
-          >
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#2563eb" }}>
-              {activities.filter((a) => a.type === "subscription").length}
+          {[
+            {
+              label: "Subscriptions",
+              value: activities.filter((a) => a.type === "subscription").length,
+              color: "#2563eb",
+            },
+            {
+              label: "Successful",
+              value: activities.filter((a) => a.status === "success").length,
+              color: "#16a34a",
+            },
+            {
+              label: "Errors",
+              value: activities.filter((a) => a.status === "error").length,
+              color: "#dc2626",
+            },
+            {
+              label: "Logins",
+              value: activities.filter((a) => a.type === "login").length,
+              color: "#d97706",
+            },
+          ].map((cell) => (
+            <div
+              key={cell.label}
+              style={{
+                textAlign: "center",
+                padding: 16,
+                border: "1px solid rgba(148,163,184,0.18)",
+                borderRadius: 14,
+                background: "rgba(255,255,255,0.75)",
+              }}
+            >
+              <div style={{ fontSize: 26, fontWeight: 950, color: cell.color }}>{cell.value}</div>
+              <div style={{ color: "#64748b", fontSize: 13, fontWeight: 750, marginTop: 4 }}>
+                {cell.label}
+              </div>
             </div>
-            <div style={{ color: "#64748b", fontSize: 14 }}>Subscriptions</div>
-          </div>
-          <div
-            style={{
-              textAlign: "center",
-              padding: 16,
-              border: "1px solid #e2e8f0",
-              borderRadius: 10,
-            }}
-          >
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#16a34a" }}>
-              {activities.filter((a) => a.status === "success").length}
-            </div>
-            <div style={{ color: "#64748b", fontSize: 14 }}>
-              Successful Actions
-            </div>
-          </div>
-          <div
-            style={{
-              textAlign: "center",
-              padding: 16,
-              border: "1px solid #e2e8f0",
-              borderRadius: 10,
-            }}
-          >
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#dc2626" }}>
-              {activities.filter((a) => a.status === "error").length}
-            </div>
-            <div style={{ color: "#64748b", fontSize: 14 }}>Errors</div>
-          </div>
-          <div
-            style={{
-              textAlign: "center",
-              padding: 16,
-              border: "1px solid #e2e8f0",
-              borderRadius: 10,
-            }}
-          >
-            <div style={{ fontSize: 24, fontWeight: 700, color: "#d97706" }}>
-              {activities.filter((a) => a.type === "login").length}
-            </div>
-            <div style={{ color: "#64748b", fontSize: 14 }}>Login Events</div>
-          </div>
+          ))}
         </div>
       </div>
     </div>
