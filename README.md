@@ -2,6 +2,8 @@
 
 React.js UI matching the provided designs: login, registration, plans & pricing, payment, user dashboard, and admin dashboard.
 
+For technical details and architecture overview, see [PROJECT_EXPLANATION.md](PROJECT_EXPLANATION.md).
+
 ## Run the app
 
 ```bash
