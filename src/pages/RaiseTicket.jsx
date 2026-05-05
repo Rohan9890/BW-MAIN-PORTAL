@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ticketsBackend } from "../services/backendApis";
+import { invalidateDashboardData } from "../services/dashboardInvalidate";
 import { showError, showSuccess } from "../services/toast";
+import "./Support.css";
 
 export default function RaiseTicket() {
   const navigate = useNavigate();
@@ -37,6 +39,7 @@ export default function RaiseTicket() {
       }
       const res = await ticketsBackend.create(payload);
       const createdId = res?.id || res?.ticketId || res?.ticket?.id;
+      invalidateDashboardData("ticket-created");
       showSuccess("Ticket created");
       if (createdId) {
         navigate(`/support/ticket/${encodeURIComponent(String(createdId))}`);
@@ -53,19 +56,20 @@ export default function RaiseTicket() {
   };
 
   return (
-    <div style={{ maxWidth: 920, margin: "0 auto", padding: 4 }}>
+    <div className="support-page" style={{ maxWidth: 920, margin: "0 auto", padding: 4 }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h1 style={{ margin: 0, fontSize: 26, letterSpacing: "-0.3px" }}>
+          <h1 className="support-title" style={{ margin: 0, fontSize: 26, letterSpacing: "-0.3px" }}>
             Raise a ticket
           </h1>
-          <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+          <div className="support-subtitle" style={{ marginTop: 4 }}>
             Tell us what you need and we’ll get back quickly.
           </div>
         </div>
         <button
           type="button"
           onClick={() => navigate("/support/chat")}
+          className="support-action"
           style={{
             border: "1px solid rgba(148,163,184,0.5)",
             background: "#fff",
@@ -81,6 +85,7 @@ export default function RaiseTicket() {
       </div>
 
       <div
+        className="support-card"
         style={{
           marginTop: 14,
           background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
@@ -107,6 +112,8 @@ export default function RaiseTicket() {
           </div>
         ) : null}
 
+        <div className="support-divider" />
+
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -123,6 +130,7 @@ export default function RaiseTicket() {
               value={form.subject}
               onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}
               placeholder="e.g. Payment failed but amount debited"
+              className="support-input"
               style={inputStyle(Boolean(fieldErrors.subject))}
               disabled={loading}
             />
@@ -140,6 +148,7 @@ export default function RaiseTicket() {
               value={form.message}
               onChange={(e) => setForm((p) => ({ ...p, message: e.target.value }))}
               placeholder="Include steps, error messages, and any relevant details."
+              className="support-textarea"
               style={{
                 ...inputStyle(Boolean(fieldErrors.message)),
                 minHeight: 140,
@@ -156,6 +165,7 @@ export default function RaiseTicket() {
           <button
             type="submit"
             disabled={!canSubmit}
+            className="support-btn"
             style={{
               border: "none",
               borderRadius: 14,

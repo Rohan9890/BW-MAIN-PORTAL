@@ -1,6 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { setLogoutHandler } from "../services/apiClient";
 import { profileBackend } from "../services/backendApis";
+import { invalidateDashboardBundleCache } from "../services/dashboardBundleCache";
+import { cancelDebouncedDashboardInvalidate } from "../services/dashboardInvalidate";
+import { invalidateRecentAppsCache } from "../services/recentAppsCache";
+import { invalidateUsageTimeseriesCache } from "../services/usageTimeseriesCache";
 
 const TOKEN_KEY = "ui-access-token";
 const USER_ID_KEY = "userId";
@@ -139,6 +143,10 @@ export function AuthProvider({ children }) {
     const trimmed = typeof nextToken === "string" ? nextToken.trim() : nextToken;
     if (trimmed) window.localStorage.setItem(TOKEN_KEY, trimmed);
     if (userId) window.localStorage.setItem(USER_ID_KEY, String(userId));
+    cancelDebouncedDashboardInvalidate();
+    invalidateDashboardBundleCache();
+    invalidateRecentAppsCache();
+    invalidateUsageTimeseriesCache();
     await hydrateProfile();
   };
 
@@ -154,6 +162,10 @@ export function AuthProvider({ children }) {
   };
 
   const logout = () => {
+    cancelDebouncedDashboardInvalidate();
+    invalidateDashboardBundleCache();
+    invalidateRecentAppsCache();
+    invalidateUsageTimeseriesCache();
     setProfile(null);
     window.localStorage.removeItem(TOKEN_KEY);
     window.localStorage.removeItem(USER_ID_KEY);

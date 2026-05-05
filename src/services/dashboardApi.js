@@ -238,15 +238,17 @@ export const dashboardApi = {
 
   /**
    * GET /dashboard/summary
+   * @param {object} [meta] — e.g. `{ suppressGlobalServerErrorToast: true }` for bundled loads
    */
-  async getSummary() {
-    return dashboardBackend.getSummary();
+  async getSummary(meta = {}) {
+    return dashboardBackend.getSummary(meta);
   },
 
   /**
    * GET /dashboard/transactions?page=&size=
+   * @param {object} [meta] — forwarded to `dashboardBackend.getTransactions`
    */
-  async getTransactions(page = 0, size = 10) {
-    return dashboardBackend.getTransactions({ page, size });
+  async getTransactions(page = 0, size = 10, meta = {}) {
+    return dashboardBackend.getTransactions({ page, size, ...meta });
   },
 };

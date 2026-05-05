@@ -1,3 +1,7 @@
+/**
+ * Legacy `apiClient` paths — prefer `backendApis.js` + `backendJson` for real backend routes:
+ * GET `/dashboard/summary`, GET `/dashboard/transactions`, GET `/activity/my`, GET `/notifications/my`, GET `/profile`.
+ */
 export const endpoints = {
   auth: {
     login: "/login",
@@ -5,10 +9,6 @@ export const endpoints = {
     register: "/register",
     registerIndividual: "/auth/register/individual",
     registerOrganization: "/auth/register/organization",
-  },
-  dashboard: {
-    home: "/dashboard/home",
-    activity: "/dashboard/activity",
   },
   admin: {
     dashboard: "/admin/dashboard",

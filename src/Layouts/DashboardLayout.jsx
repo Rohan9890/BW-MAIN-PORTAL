@@ -2,9 +2,7 @@ import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { useBrand } from "../context/BrandContext";
 import { getInitials, useAuth } from "../context/AuthContext";
-import { notificationsBackend } from "../services/backendApis";
-import { mapNotificationRows } from "../services/notificationUtils";
-import { showError, showSuccess } from "../services/toast";
+import { useNotificationInbox } from "../context/NotificationInboxContext";
 
 export default function DashboardLayout() {
   const { brand, defaultBrand } = useBrand();
@@ -13,49 +11,19 @@ export default function DashboardLayout() {
   const navigate = useNavigate();
   const [showPopup, setShowPopup] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [notifications, setNotifications] = useState([]);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const [notifLoading, setNotifLoading] = useState(false);
+  const {
+    notifications,
+    unreadCount,
+    loading: notifLoading,
+    retrying: notifRetrying,
+    error: notifError,
+    refresh,
+    markOneRead,
+    deleteOne,
+    markAllRead,
+  } = useNotificationInbox();
   const path = location.pathname;
   const initials = getInitials(profile?.name || "User");
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadNotifications = async () => {
-      setNotifLoading(true);
-      try {
-        const page = await notificationsBackend.list({ page: 0, size: 20 });
-        if (!isMounted) return;
-        const rows = mapNotificationRows(page);
-        setNotifications(rows);
-        setUnreadCount(rows.filter((r) => !r.read).length);
-      } catch (e) {
-        if (!isMounted) return;
-        // Keep UI usable; show toast on bell open instead.
-      } finally {
-        if (isMounted) setNotifLoading(false);
-      }
-    };
-
-    loadNotifications();
-
-    const poll = window.setInterval(() => {
-      notificationsBackend
-        .list({ page: 0, size: 20 })
-        .then((page) => {
-          if (!isMounted) return;
-          const rows = mapNotificationRows(page);
-          setUnreadCount(rows.filter((r) => !r.read).length);
-        })
-        .catch(() => {});
-    }, 30_000);
-
-    return () => {
-      isMounted = false;
-      window.clearInterval(poll);
-    };
-  }, []);
 
   const handleAvatarClick = () => {
     setShowNotifications(false);
@@ -66,19 +34,7 @@ export default function DashboardLayout() {
     setShowPopup(false);
     setShowNotifications((prev) => {
       const next = !prev;
-      if (next) {
-        // refresh list on open (fast)
-        setNotifLoading(true);
-        notificationsBackend
-          .list({ page: 0, size: 20 })
-          .then((page) => {
-            const rows = mapNotificationRows(page);
-            setUnreadCount(rows.filter((r) => !r.read).length);
-            setNotifications(rows);
-          })
-          .catch(() => {})
-          .finally(() => setNotifLoading(false));
-      }
+      if (next) void refresh({ force: true });
       return next;
     });
   };
@@ -96,17 +52,7 @@ export default function DashboardLayout() {
 
   const handleNotificationItemClick = async (item) => {
     const id = item?.id;
-    if (id != null) {
-      setNotifications((prev) =>
-        prev.map((row) => (row.id === id ? { ...row, read: true } : row)),
-      );
-      setUnreadCount((c) => Math.max(0, Number(c) - 1));
-      try {
-        await notificationsBackend.markRead(id);
-      } catch (e) {
-        showError(e?.message || "Failed to mark as read");
-      }
-    }
+    if (id != null) await markOneRead(id);
     setShowNotifications(false);
     const target = item?.navigateTo;
     if (target && /^https?:\/\//i.test(target)) {
@@ -120,30 +66,12 @@ export default function DashboardLayout() {
     navigate("/activity");
   };
 
-  const handleMarkAllRead = async () => {
-    if (!notifications.some((n) => !n.read)) return;
-    try {
-      await notificationsBackend.readAll();
-      setNotifications((prev) => prev.map((item) => ({ ...item, read: true })));
-      setUnreadCount(0);
-      showSuccess("All caught up");
-    } catch (e) {
-      showError(e?.message || "Could not mark all as read");
-    }
-  };
+  const handleMarkAllRead = () => void markAllRead();
 
-  const handleDeleteNotification = async (e, id) => {
+  const handleDeleteNotification = (e, id) => {
     e.preventDefault();
     e.stopPropagation();
-    const hit = notifications.find((n) => n.id === id);
-    const wasUnread = Boolean(hit && !hit.read);
-    try {
-      await notificationsBackend.deleteById(id);
-      setNotifications((prev) => prev.filter((n) => n.id !== id));
-      if (wasUnread) setUnreadCount((c) => Math.max(0, Number(c) - 1));
-    } catch (err) {
-      showError(err?.message || "Could not remove notification");
-    }
+    void deleteOne(id);
   };
 
   const handleOptionClick = (option) => {
@@ -338,7 +266,7 @@ export default function DashboardLayout() {
                     strokeLinecap="round"
                   />
                 </svg>
-                {unreadCount > 0 && (
+                    {unreadCount > 0 ? (
                   <span
                     style={{
                       position: "absolute",
@@ -356,9 +284,9 @@ export default function DashboardLayout() {
                       padding: "0 4px",
                     }}
                   >
-                    {unreadCount}
+                    {unreadCount > 99 ? "99+" : unreadCount}
                   </span>
-                )}
+                ) : null}
               </button>
 
               {showNotifications && (
@@ -423,13 +351,15 @@ export default function DashboardLayout() {
                     <button
                       type="button"
                       onClick={() => void handleMarkAllRead()}
+                      disabled={notifLoading}
                       style={{
                         border: "1px solid #dbeafe",
                         background: "#eff6ff",
                         color: "#1d4ed8",
                         fontSize: 11,
                         fontWeight: 750,
-                        cursor: "pointer",
+                        cursor: notifLoading ? "not-allowed" : "pointer",
+                        opacity: notifLoading ? 0.6 : 1,
                         padding: "6px 10px",
                         borderRadius: 10,
                         flexShrink: 0,
@@ -440,9 +370,57 @@ export default function DashboardLayout() {
                   </div>
 
                   <div style={{ maxHeight: 280, overflowY: "auto" }}>
-                    {notifLoading ? (
-                      <div style={{ padding: 14, color: "#64748b", fontWeight: 600 }}>
-                        Loading…
+                    {notifRetrying && notifLoading ? (
+                      <div
+                        style={{
+                          padding: "8px 14px",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: "#b45309",
+                          background: "#fffbeb",
+                          borderBottom: "1px solid #fde68a",
+                        }}
+                        role="status"
+                      >
+                        Retrying…
+                      </div>
+                    ) : null}
+                    {notifError ? (
+                      <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 600, color: "#b91c1c" }}>
+                        {notifError}
+                        <button
+                          type="button"
+                          onClick={() => void refresh({ force: true })}
+                          style={{
+                            display: "block",
+                            marginTop: 8,
+                            border: "1px solid #fecaca",
+                            background: "#fef2f2",
+                            color: "#991b1b",
+                            borderRadius: 8,
+                            padding: "6px 10px",
+                            cursor: "pointer",
+                            fontWeight: 700,
+                            fontSize: 12,
+                          }}
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : null}
+                    {notifLoading && notifications.length === 0 && !notifError ? (
+                      <div style={{ padding: "10px 12px" }}>
+                        {[0, 1, 2, 3].map((i) => (
+                          <div
+                            key={i}
+                            style={{
+                              height: 46,
+                              marginBottom: i === 3 ? 0 : 8,
+                              borderRadius: 10,
+                              background: "#f1f5f9",
+                            }}
+                          />
+                        ))}
                       </div>
                     ) : null}
                     {notifications.map((item) => (
@@ -534,7 +512,7 @@ export default function DashboardLayout() {
                         </button>
                       </div>
                     ))}
-                    {!notifLoading && notifications.length === 0 ? (
+                    {!notifLoading && notifications.length === 0 && !notifError ? (
                       <div style={{ padding: 18, color: "#64748b", fontWeight: 650, fontSize: 13 }}>
                         No notifications yet.
                       </div>

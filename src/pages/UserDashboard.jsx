@@ -4,26 +4,71 @@ import {
   useEffect,
   useCallback,
   useMemo,
-  useId,
+  lazy,
+  Suspense,
 } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useBrand } from "../context/BrandContext";
 import { getGreetingFirstName, getInitials, useAuth } from "../context/AuthContext";
+import { useNotificationInbox } from "../context/NotificationInboxContext";
 import { dashboardApi } from "../services";
 import {
+  readDashboardBundleCache,
+  writeDashboardBundleCacheIfComplete,
+} from "../services/dashboardBundleCache";
+import {
+  readRecentAppsCache,
+  writeRecentAppsCache,
+} from "../services/recentAppsCache";
+import { getUsageTimeseriesCache } from "../services/usageTimeseriesCache";
+import { DASHBOARD_INVALIDATE_EVENT } from "../services/dashboardInvalidate";
+import {
   activityBackend,
-  notificationsBackend,
+  dashboardBackend,
   ticketsBackend,
 } from "../services/backendApis";
-import { mapNotificationRows } from "../services/notificationUtils";
-import { showError, showSuccess } from "../services/toast";
+import { withRetryOnce } from "../services/withRetryOnce";
+import { showSuccess } from "../services/toast";
+import {
+  normalizeUsageTimeseriesPayload,
+  usageIntervalForRange,
+} from "../utils/usageTimeseries";
+import { recordDashboardUsageAppPick } from "../utils/usageAppSelectionAnalytics";
 import "./UserDashboard.css";
 
+const AppUsageChart = lazy(() => import("./AppUsageChart"));
+
+const USAGE_APP_STORAGE_KEY = "bw_dashboard_usage_app_v1";
+
 const DASHBOARD_TXN_PAGE_SIZE = 80;
+/** Avoid duplicate global toasts on partial failures — errors surface per dashboard section */
+const DASHBOARD_API_QUIET = { suppressGlobalServerErrorToast: true };
 const DASHBOARD_POLL_MS = 60_000;
 const DASHBOARD_AUTOREFRESH_ENABLED =
   import.meta.env.VITE_DASHBOARD_AUTOREFRESH !== "false";
 const IS_DEV = import.meta.env.DEV;
+const DEBUG_DASHBOARD = import.meta.env.VITE_DEBUG_DASHBOARD === "true";
+
+/** Tracks in-flight usage timeseries keys (kept in sync with coalescing map below). */
+const inFlightUsageRequests = new Set();
+const usageTimeseriesInflightPromises = new Map();
+
+function usageInflightRequestKey(appId, range) {
+  return `${String(appId)}_${String(range)}`;
+}
+
+/** Single network GET per appId+range when prefetch and main fire together; shared promise for all subscribers. */
+function coalesceUsageTimeseriesFetch(inflightKey, startFn) {
+  let p = usageTimeseriesInflightPromises.get(inflightKey);
+  if (p) return p;
+  inFlightUsageRequests.add(inflightKey);
+  p = Promise.resolve(startFn()).finally(() => {
+    inFlightUsageRequests.delete(inflightKey);
+    usageTimeseriesInflightPromises.delete(inflightKey);
+  });
+  usageTimeseriesInflightPromises.set(inflightKey, p);
+  return p;
+}
 
 // React 18 StrictMode (dev) mounts → runs effects → unmounts → mounts again.
 // To avoid duplicate network calls on the initial dashboard entry, we de-dupe
@@ -32,17 +77,61 @@ let _dashboardInitialLoadPromise = null;
 let _dashboardInitialLoadStartedAt = 0;
 const DASHBOARD_INITIAL_DEDUPE_MS = 1200;
 
-async function fetchDashboardInitialBundle() {
-  const results = await Promise.allSettled([
-    dashboardApi.getSummary(),
-    dashboardApi.getTransactions(0, DASHBOARD_TXN_PAGE_SIZE),
-    ticketsBackend.my(),
-    activityBackend.list({ page: 0, size: 10 }),
+async function fetchDashboardInitialBundleFromNetwork(onRetrying) {
+  const q = DASHBOARD_API_QUIET;
+  const wrap = (fn) => withRetryOnce(fn, { onRetrying });
+  return Promise.allSettled([
+    wrap(() => dashboardApi.getSummary(q)),
+    wrap(() =>
+      dashboardApi.getTransactions(0, DASHBOARD_TXN_PAGE_SIZE, q),
+    ),
+    wrap(() => ticketsBackend.my(q)),
+    wrap(() => activityBackend.list({ page: 0, size: 10, ...q })),
   ]);
-  return results;
 }
 
-function getInitialDashboardBundleDeduped() {
+/** Normalize Spring `Page` or array responses from GET /dashboard/transactions */
+function normalizeDashboardTxnPage(body) {
+  if (body == null) {
+    return {
+      content: [],
+      totalPages: 1,
+      totalElements: 0,
+      last: true,
+      number: 0,
+    };
+  }
+  if (Array.isArray(body)) {
+    return {
+      content: body,
+      totalPages: 1,
+      totalElements: body.length,
+      last: true,
+      number: 0,
+    };
+  }
+  const content = Array.isArray(body.content)
+    ? body.content
+    : Array.isArray(body.items)
+      ? body.items
+      : Array.isArray(body.records)
+        ? body.records
+        : [];
+  const totalElements = Number(body.totalElements ?? body.total ?? content.length) || 0;
+  const totalPages = Math.max(1, Number(body.totalPages) || 1);
+  const number = Number(body.number ?? body.page ?? 0) || 0;
+  const last =
+    body.last !== undefined ? Boolean(body.last) : number >= totalPages - 1;
+  return {
+    content,
+    totalPages,
+    totalElements,
+    last,
+    number,
+  };
+}
+
+function getInitialDashboardBundleDeduped(onRetrying) {
   const now = Date.now();
   if (
     _dashboardInitialLoadPromise &&
@@ -51,7 +140,7 @@ function getInitialDashboardBundleDeduped() {
     return _dashboardInitialLoadPromise;
   }
   _dashboardInitialLoadStartedAt = now;
-  _dashboardInitialLoadPromise = fetchDashboardInitialBundle().finally(() => {
+  _dashboardInitialLoadPromise = fetchDashboardInitialBundleFromNetwork(onRetrying).finally(() => {
     // Keep it around briefly for StrictMode remount, then allow real reloads.
     window.setTimeout(() => {
       _dashboardInitialLoadPromise = null;
@@ -68,9 +157,6 @@ const NAV_ITEMS = [
   { label: "Favorites", path: "/favorites" },
   { label: "Activity", path: "/activity" },
 ];
-
-/** Placeholder until a “recent apps” API exists */
-const RECENT_APPS = [];
 
 const WHATS_NEW = [
   { icon: "📋", text: "New Feature: API usage insights added" },
@@ -222,71 +308,55 @@ function normalizeActivityFeedPayload(payload) {
   return [];
 }
 
-/**
- * Last 7 local days, transaction counts per day from loaded dashboard transactions.
- */
-function buildDailyTransactionSeries(transactions, dayCount = 7) {
-  const labels = [];
-  const keys = [];
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  for (let i = dayCount - 1; i >= 0; i -= 1) {
-    const d = new Date(start);
-    d.setDate(d.getDate() - i);
-    keys.push(localDateKey(d));
-    labels.push(d.toLocaleDateString("en-IN", { weekday: "short" }));
-  }
-  const counts = keys.map(() => 0);
-  let totalHits = 0;
-  for (const txn of transactions) {
-    const ms = txn.sortAt;
-    if (!Number.isFinite(ms) || ms <= 0) continue;
-    const d = new Date(ms);
-    d.setHours(0, 0, 0, 0);
-    const k = localDateKey(d);
-    const idx = keys.indexOf(k);
-    if (idx >= 0) {
-      counts[idx] += 1;
-      totalHits += 1;
-    }
-  }
-  const maxCount = Math.max(...counts, 1);
-  const span = Math.max(dayCount - 1, 1);
-  const xs = counts.map((_, i) => 6 + (i * (348 / span)));
-  const ys = counts.map((c) => {
-    const t = maxCount <= 0 ? 0 : c / maxCount;
-    return 88 - Math.round(t * 72);
-  });
-  const linePoints = xs.map((x, i) => `${x},${ys[i]}`).join(" ");
-  const lastX = xs[xs.length - 1] ?? 6;
-  const areaPoints = `${linePoints} ${lastX},100 6,100`;
-  const hitPoints = counts.map((count, i) => ({
-    x: xs[i],
-    y: ys[i],
-    count,
-    label: labels[i],
-    dateKey: keys[i],
-  }));
-  return {
-    labels,
-    counts,
-    maxCount,
-    totalHits,
-    linePoints,
-    areaPoints,
-    hitPoints,
-  };
+/** GET /dashboard/recent-apps — normalize to card rows */
+function normalizeRecentAppsPayload(body) {
+  if (body == null) return [];
+  const r = body?.data !== undefined ? body.data : body;
+  const raw = Array.isArray(r)
+    ? r
+    : Array.isArray(r?.content)
+      ? r.content
+      : Array.isArray(r?.items)
+        ? r.items
+        : Array.isArray(r?.apps)
+          ? r.apps
+          : [];
+  return raw
+    .map((row) => {
+      const appId = row?.appId ?? row?.id ?? row?.applicationId;
+      if (appId === undefined || appId === null) return null;
+      const appName = String(row?.appName ?? row?.name ?? row?.title ?? "App").trim() || "App";
+      const lastOpenedAt = row?.lastOpenedAt ?? row?.openedAt ?? row?.lastAccessAt ?? null;
+      const appUrl = String(row?.appUrl ?? row?.url ?? "").trim();
+      return { appId, appName, lastOpenedAt, appUrl };
+    })
+    .filter(Boolean);
 }
 
-function formatChartSlotDate(dateKey) {
-  if (!dateKey || typeof dateKey !== "string") return "";
-  const d = new Date(`${dateKey}T12:00:00`);
-  if (Number.isNaN(d.getTime())) return dateKey;
-  return d.toLocaleDateString("en-IN", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+function formatLastOpenedAt(iso) {
+  if (!iso) return "—";
+  return formatTxnDate(iso);
+}
+
+function mapRecentAppToGridEntry(row, i) {
+  const palette = [
+    { iconBg: "#eff6ff", iconColor: "#2563eb" },
+    { iconBg: "#ecfdf5", iconColor: "#059669" },
+    { iconBg: "#fff7ed", iconColor: "#ea580c" },
+    { iconBg: "#f5f3ff", iconColor: "#7c3aed" },
+    { iconBg: "#fef2f2", iconColor: "#dc2626" },
+    { iconBg: "#ecfeff", iconColor: "#0891b2" },
+  ];
+  const p = palette[i % palette.length];
+  return {
+    key: `recent-${row.appId}-${i}`,
+    appId: row.appId,
+    name: row.appName,
+    time: formatLastOpenedAt(row.lastOpenedAt),
+    appUrl: row.appUrl,
+    iconBg: p.iconBg,
+    iconColor: p.iconColor,
+  };
 }
 
 function downloadTransactionsCsv(rows) {
@@ -420,9 +490,14 @@ function AppGridIcon({ bg, color }) {
   );
 }
 
-function ChartSkeleton() {
+function ChartSkeleton({ matchUsageChartHeight = false }) {
   return (
-    <div className="ud-chart-wrap ud-chart-wrap--skeleton" aria-hidden>
+    <div
+      className={`ud-chart-wrap ud-chart-wrap--skeleton${
+        matchUsageChartHeight ? " ud-chart-wrap--skeleton--usage-match" : ""
+      }`}
+      aria-hidden
+    >
       <div className="ud-y-labels ud-y-labels--skeleton">
         <span className="ud-chart-sk-y" />
         <span className="ud-chart-sk-y" />
@@ -485,8 +560,25 @@ function ActivitySkeletonRows({ count = 6 }) {
   ));
 }
 
+function NotificationSkeletonRows({ count = 4 }) {
+  return Array.from({ length: count }, (_, i) => (
+    <div
+      key={`ud-notif-sk-${i}`}
+      className="ud-notif-item ud-notif-item--skeleton"
+      aria-busy="true"
+      aria-hidden
+    >
+      <span className="ud-notif-sk-dot" />
+      <div className="ud-notif-sk-body">
+        <span className="ud-notif-sk-line ud-notif-sk-line--long" />
+        <span className="ud-notif-sk-line ud-notif-sk-line--short" />
+      </div>
+    </div>
+  ));
+}
+
 function AppsGridSkeleton() {
-  return Array.from({ length: 4 }, (_, i) => (
+  return Array.from({ length: 6 }, (_, i) => (
     <div
       key={`app-sk-${i}`}
       className="ud-app-entry ud-app-entry--skeleton"
@@ -502,107 +594,26 @@ function AppsGridSkeleton() {
   ));
 }
 
-function UsageChart({ series }) {
-  const uid = useId().replace(/:/g, "");
-  const gradId = `udGrad-${uid}`;
-  const [tipIdx, setTipIdx] = useState(null);
-  const { labels, maxCount, linePoints, areaPoints, hitPoints = [] } = series;
-  const yTop = maxCount;
-  const yMid = Math.max(0, Math.ceil((maxCount * 2) / 3));
-  const yLow = Math.max(0, Math.ceil(maxCount / 3));
-  const tip = tipIdx != null ? hitPoints[tipIdx] : null;
-
-  return (
-    <div
-      className="ud-chart-wrap ud-chart-wrap--interactive"
-      onMouseLeave={() => setTipIdx(null)}
-    >
-      <div className="ud-y-labels">
-        <span>{yTop}</span>
-        <span>{yMid}</span>
-        <span>{yLow}</span>
-        <span>0</span>
-      </div>
-      <div className="ud-chart-body">
-        <svg
-          viewBox="0 0 360 100"
-          preserveAspectRatio="none"
-          className={`ud-chart-svg${tipIdx != null ? " ud-chart-svg--hover" : ""}`}
-        >
-          <defs>
-            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.22" />
-              <stop offset="100%" stopColor="#3b82f6" stopOpacity="0.01" />
-            </linearGradient>
-          </defs>
-          <polygon points={areaPoints} fill={`url(#${gradId})`} />
-          <polyline
-            points={linePoints}
-            fill="none"
-            stroke="#3b82f6"
-            strokeWidth="2.4"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            className="ud-chart-line"
-          />
-          {hitPoints.map((p, i) => (
-            <g key={`pt-${p.dateKey}-${i}`}>
-              {tipIdx === i ? (
-                <circle
-                  cx={p.x}
-                  cy={p.y}
-                  r="5"
-                  fill="#fff"
-                  stroke="#2563eb"
-                  strokeWidth="2"
-                  className="ud-chart-point-ring"
-                />
-              ) : null}
-              <circle
-                cx={p.x}
-                cy={p.y}
-                r="14"
-                fill="transparent"
-                className="ud-chart-hit"
-                onMouseEnter={() => setTipIdx(i)}
-                tabIndex={-1}
-                aria-hidden
-              />
-            </g>
-          ))}
-        </svg>
-        {tip ? (
-          <div className="ud-chart-tooltip" role="tooltip">
-            <span className="ud-chart-tooltip-day">{tip.label}</span>
-            <span className="ud-chart-tooltip-date">
-              {formatChartSlotDate(tip.dateKey)}
-            </span>
-            <span className="ud-chart-tooltip-count">
-              {tip.count} transaction{tip.count === 1 ? "" : "s"}
-            </span>
-          </div>
-        ) : null}
-        <div className="ud-x-labels">
-          {labels.map((lab, i) => (
-            <span key={`${lab}-${i}`}>{lab}</span>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function UserDashboard() {
   const [search, setSearch] = useState("");
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [notifications, setNotifications] = useState([]);
-  const [notifLoading, setNotifLoading] = useState(false);
   const [serverActivity, setServerActivity] = useState([]);
   const avatarRef = useRef(null);
   const notifRef = useRef(null);
   const { brand, defaultBrand } = useBrand();
-  const { profile, logout } = useAuth();
+  const { profile, logout, token } = useAuth();
+  const {
+    notifications,
+    unreadCount: inboxUnreadCount,
+    loading: notifLoading,
+    retrying: inboxRetrying,
+    error: notifError,
+    refresh: refreshNotifications,
+    markOneRead,
+    deleteOne,
+    markAllRead,
+  } = useNotificationInbox();
   const navigate = useNavigate();
   const location = useLocation();
   const [summary, setSummary] = useState(null);
@@ -617,17 +628,44 @@ export default function UserDashboard() {
   const [dashboardRefreshing, setDashboardRefreshing] = useState(true);
   const [initialDashboardLoadDone, setInitialDashboardLoadDone] =
     useState(false);
-  const [dashboardError, setDashboardError] = useState("");
+  const [sectionErrors, setSectionErrors] = useState({
+    summary: "",
+    transactions: "",
+    tickets: "",
+    activity: "",
+    recentApps: "",
+  });
+  const [recentAppsRaw, setRecentAppsRaw] = useState([]);
+  const [usageRange, setUsageRange] = useState("7d");
+  const [selectedUsageAppId, setSelectedUsageAppId] = useState("");
+  const [usageSeriesRows, setUsageSeriesRows] = useState([]);
+  const [usageChartError, setUsageChartError] = useState("");
+  const [usageChartLoading, setUsageChartLoading] = useState(false);
+  const [usageChartRetrying, setUsageChartRetrying] = useState(false);
+  const [usageAppPickerOpen, setUsageAppPickerOpen] = useState(false);
+  const [usagePrefetchEngaged, setUsagePrefetchEngaged] = useState(false);
+  /** Bumped when dashboard force-refresh clears usage cache so chart refetches (deps otherwise unchanged). */
+  const [usageFetchVersion, setUsageFetchVersion] = useState(0);
+  const usageDataCacheRef = useRef(getUsageTimeseriesCache());
+  const usageAppPickerRef = useRef(null);
+  const appUsageBlockRef = useRef(null);
+  const usageFetchGenRef = useRef(0);
+  const prevUsagePrefetchTokenRef = useRef(token);
   const [lastDashboardUpdatedAt, setLastDashboardUpdatedAt] = useState(null);
   const [lastUpdatedTick, setLastUpdatedTick] = useState(0);
+  const [bundleRetrying, setBundleRetrying] = useState(false);
+  const [txnRetrying, setTxnRetrying] = useState(false);
   const dashboardRequestIdRef = useRef(0);
+  const bundleRetryWaveRef = useRef(false);
   const initialDashboardLoadDoneRef = useRef(false);
   const query = search.trim().toLowerCase();
 
   const loadDashboardData = useCallback(async (options = {}) => {
-    const { silent = false } = options;
+    const { silent = false, force = false } = options;
     const requestId = ++dashboardRequestIdRef.current;
     const isRefresh = initialDashboardLoadDoneRef.current;
+    bundleRetryWaveRef.current = false;
+    setBundleRetrying(false);
     setDashboardRefreshing(true);
     if (!isRefresh) {
       setTicketsListTotal(null);
@@ -635,67 +673,143 @@ export default function UserDashboard() {
       setServerActivity([]);
     }
 
-    const results =
-      IS_DEV && !isRefresh
-        ? await getInitialDashboardBundleDeduped()
-        : await fetchDashboardInitialBundle();
+    const onBundleRetrying = () => {
+      if (!bundleRetryWaveRef.current) {
+        bundleRetryWaveRef.current = true;
+        setBundleRetrying(true);
+      }
+    };
 
-    if (requestId !== dashboardRequestIdRef.current) return;
+    const wrap = (fn) => withRetryOnce(fn, { onRetrying: onBundleRetrying });
+
+    const cachedRecentPayload = !force ? readRecentAppsCache(token) : null;
+    const recentP =
+      cachedRecentPayload != null
+        ? null
+        : (async () => {
+            try {
+              const value = await wrap(() =>
+                dashboardBackend.getRecentApps(DASHBOARD_API_QUIET),
+              );
+              writeRecentAppsCache(token, value);
+              return { status: "fulfilled", value };
+            } catch (reason) {
+              return { status: "rejected", reason };
+            }
+          })();
+
+    if (force) {
+      usageDataCacheRef.current.clear();
+      setUsageFetchVersion((v) => v + 1);
+    }
+
+    let results = null;
+    if (!isRefresh && !force) {
+      results = readDashboardBundleCache(token);
+    }
+
+    if (!results) {
+      results =
+        IS_DEV && !isRefresh
+          ? await getInitialDashboardBundleDeduped(onBundleRetrying)
+          : await fetchDashboardInitialBundleFromNetwork(onBundleRetrying);
+      writeDashboardBundleCacheIfComplete(token, results);
+    }
+
+    if (requestId !== dashboardRequestIdRef.current) {
+      bundleRetryWaveRef.current = false;
+      setBundleRetrying(false);
+      setDashboardRefreshing(false);
+      return;
+    }
+
+    const recentR =
+      cachedRecentPayload != null
+        ? { status: "fulfilled", value: cachedRecentPayload }
+        : await recentP;
+
+    if (DEBUG_DASHBOARD && recentR.status === "fulfilled") {
+      // eslint-disable-next-line no-console
+      console.log("Recent Apps API response:", recentR.value);
+    }
+
+    if (requestId !== dashboardRequestIdRef.current) {
+      bundleRetryWaveRef.current = false;
+      setBundleRetrying(false);
+      setDashboardRefreshing(false);
+      return;
+    }
 
     const [summaryR, txnR, ticketsR, activityR] = results;
-    const errors = [];
+
+    const nextSectionErrors = {
+      summary:
+        summaryR.status === "fulfilled"
+          ? ""
+          : rejectionMessage(
+              summaryR.reason,
+              "Could not load dashboard summary.",
+            ),
+      transactions:
+        txnR.status === "fulfilled"
+          ? ""
+          : rejectionMessage(txnR.reason, "Could not load transactions."),
+      tickets:
+        ticketsR.status === "fulfilled"
+          ? ""
+          : rejectionMessage(ticketsR.reason, "Could not load ticket count."),
+      activity:
+        activityR.status === "fulfilled"
+          ? ""
+          : rejectionMessage(activityR.reason, "Could not load activity feed."),
+      recentApps:
+        recentR.status === "fulfilled"
+          ? ""
+          : rejectionMessage(
+              recentR.reason,
+              "Could not load recently accessed apps.",
+            ),
+    };
+    setSectionErrors(nextSectionErrors);
+
+    if (recentR.status === "fulfilled") {
+      setRecentAppsRaw(normalizeRecentAppsPayload(recentR.value).slice(0, 6));
+    } else if (!silent && !isRefresh) {
+      setRecentAppsRaw([]);
+    }
 
     if (summaryR.status === "fulfilled") {
       const body = summaryR.value;
       setSummary(body ?? null);
-    } else {
-      if (!isRefresh) {
-        setSummary(null);
-      }
-      errors.push(
-        rejectionMessage(
-          summaryR.reason,
-          "Could not load dashboard summary.",
-        ),
-      );
+    } else if (!isRefresh) {
+      setSummary(null);
     }
 
     if (txnR.status === "fulfilled") {
-      const body = txnR.value;
-      const page = body;
-      const content = Array.isArray(page?.content) ? page.content : [];
-      setTransactionsPage(0);
-      setTransactionsTotalPages(Number(page?.totalPages) || 1);
-      setTransactionsTotalElements(Number(page?.totalElements) || 0);
-      setTransactionsLastPage(Boolean(page?.last));
+      const page = normalizeDashboardTxnPage(txnR.value);
+      const content = page.content;
+      setTransactionsPage(Number(page.number) || 0);
+      setTransactionsTotalPages(page.totalPages);
+      setTransactionsTotalElements(page.totalElements);
+      setTransactionsLastPage(page.last);
       setTransactions(
         content.map((row, i) => mapApiTransactionToListItem(row, i)),
       );
-    } else {
-      if (!isRefresh) {
-        setTransactions([]);
-        setTransactionsPage(0);
-        setTransactionsTotalPages(1);
-        setTransactionsTotalElements(0);
-        setTransactionsLastPage(true);
-      }
-      errors.push(
-        rejectionMessage(txnR.reason, "Could not load transactions."),
-      );
+    } else if (!isRefresh) {
+      setTransactions([]);
+      setTransactionsPage(0);
+      setTransactionsTotalPages(1);
+      setTransactionsTotalElements(0);
+      setTransactionsLastPage(true);
     }
 
     if (ticketsR.status === "fulfilled") {
       const extracted = extractTicketsListTotal(ticketsR.value);
       setTicketsListTotal(extracted);
       setRecentTickets(extractTicketsListContent(ticketsR.value));
-    } else {
-      if (!isRefresh) {
-        setTicketsListTotal(null);
-        setRecentTickets([]);
-      }
-      errors.push(
-        rejectionMessage(ticketsR.reason, "Could not load ticket count."),
-      );
+    } else if (!isRefresh) {
+      setTicketsListTotal(null);
+      setRecentTickets([]);
     }
 
     if (activityR.status === "fulfilled") {
@@ -703,23 +817,26 @@ export default function UserDashboard() {
       setServerActivity(
         rawList.map((row, idx) => mapActivityApiRow(row, idx, 0)),
       );
-    } else {
-      if (!isRefresh) setServerActivity([]);
-      errors.push(
-        rejectionMessage(activityR.reason, "Could not load activity feed."),
-      );
+    } else if (!isRefresh) {
+      setServerActivity([]);
     }
 
-    if (requestId !== dashboardRequestIdRef.current) return;
+    if (requestId !== dashboardRequestIdRef.current) {
+      bundleRetryWaveRef.current = false;
+      setBundleRetrying(false);
+      setDashboardRefreshing(false);
+      return;
+    }
 
-    const errorText = errors.filter(Boolean).join(" ");
-    setDashboardError(errorText);
+    const anySectionFailed = Object.values(nextSectionErrors).some(Boolean);
+    const coreDataOk =
+      summaryR.status === "fulfilled" || txnR.status === "fulfilled";
 
-    if (isRefresh && !errorText && !silent) {
+    if (isRefresh && !anySectionFailed && !silent) {
       showSuccess("Dashboard refreshed");
     }
 
-    if (!errorText) {
+    if (coreDataOk) {
       setLastDashboardUpdatedAt(Date.now());
     }
 
@@ -727,35 +844,47 @@ export default function UserDashboard() {
       initialDashboardLoadDoneRef.current = true;
       setInitialDashboardLoadDone(true);
     }
+    bundleRetryWaveRef.current = false;
+    setBundleRetrying(false);
     setDashboardRefreshing(false);
-  }, []);
+  }, [token]);
 
   const loadTransactionsPage = useCallback(async (nextPage) => {
     const pageIndex = Math.max(0, Number(nextPage) || 0);
     const requestId = ++dashboardRequestIdRef.current;
     setTransactionsPageLoading(true);
-    setDashboardError("");
+    setTxnRetrying(false);
+    setSectionErrors((prev) => ({ ...prev, transactions: "" }));
 
     try {
-      const page = await dashboardApi.getTransactions(
-        pageIndex,
-        DASHBOARD_TXN_PAGE_SIZE,
+      const raw = await withRetryOnce(
+        () =>
+          dashboardApi.getTransactions(
+            pageIndex,
+            DASHBOARD_TXN_PAGE_SIZE,
+            DASHBOARD_API_QUIET,
+          ),
+        { onRetrying: () => setTxnRetrying(true) },
       );
       if (requestId !== dashboardRequestIdRef.current) return;
-      if (!page) return;
-      const content = Array.isArray(page?.content) ? page.content : [];
+      const page = normalizeDashboardTxnPage(raw);
+      const content = page.content;
       setTransactionsPage(pageIndex);
-      setTransactionsTotalPages(Number(page?.totalPages) || 1);
-      setTransactionsTotalElements(Number(page?.totalElements) || 0);
-      setTransactionsLastPage(Boolean(page?.last));
+      setTransactionsTotalPages(page.totalPages);
+      setTransactionsTotalElements(page.totalElements);
+      setTransactionsLastPage(page.last);
       setTransactions(
         content.map((row, i) => mapApiTransactionToListItem(row, i)),
       );
     } catch (err) {
       if (requestId !== dashboardRequestIdRef.current) return;
-      setDashboardError(rejectionMessage(err, "Could not load transactions."));
+      setSectionErrors((prev) => ({
+        ...prev,
+        transactions: rejectionMessage(err, "Could not load transactions."),
+      }));
     } finally {
       if (requestId === dashboardRequestIdRef.current) {
+        setTxnRetrying(false);
         setTransactionsPageLoading(false);
       }
     }
@@ -766,6 +895,14 @@ export default function UserDashboard() {
     return () => {
       dashboardRequestIdRef.current += 1;
     };
+  }, [loadDashboardData]);
+
+  useEffect(() => {
+    const onInvalidate = () => {
+      void loadDashboardData({ silent: true, force: true });
+    };
+    window.addEventListener(DASHBOARD_INVALIDATE_EVENT, onInvalidate);
+    return () => window.removeEventListener(DASHBOARD_INVALIDATE_EVENT, onInvalidate);
   }, [loadDashboardData]);
 
   useEffect(() => {
@@ -828,6 +965,12 @@ export default function UserDashboard() {
     [lastDashboardUpdatedAt, lastUpdatedTick],
   );
 
+  const hasAnySectionError = useMemo(
+    () => Object.values(sectionErrors).some(Boolean),
+    [sectionErrors],
+  );
+
+  const summaryLoadFailed = Boolean(sectionErrors.summary);
   const totalApps = Number(summary?.totalApps) || 0;
   const activeSubscriptions = Number(summary?.activeSubscriptions) || 0;
   const totalTransactions = Number(summary?.totalTransactions ?? 0) || 0;
@@ -841,11 +984,6 @@ export default function UserDashboard() {
     const n = Number(ticketsListTotal);
     return Number.isFinite(n) && n >= 0 ? n : null;
   }, [ticketsListTotal]);
-
-  const txChartSeries = useMemo(
-    () => buildDailyTransactionSeries(transactions),
-    [transactions],
-  );
 
   const activityItems = useMemo(() => {
     if (Array.isArray(serverActivity) && serverActivity.length > 0) {
@@ -875,11 +1013,207 @@ export default function UserDashboard() {
       .slice(0, 14);
   }, [serverActivity, transactions, recentTickets]);
 
-  const filteredRecentApps = query
-    ? RECENT_APPS.filter((app) =>
-        `${app.name} ${app.time}`.toLowerCase().includes(query),
-      )
-    : RECENT_APPS;
+  const recentAppsForGrid = useMemo(() => {
+    const rows = recentAppsRaw.map((r, i) => mapRecentAppToGridEntry(r, i));
+    if (!query) return rows;
+    return rows.filter((app) =>
+      `${app.name} ${app.time}`.toLowerCase().includes(query),
+    );
+  }, [recentAppsRaw, query]);
+
+  const usageAppOptions = useMemo(() => {
+    const palette = [
+      { iconBg: "#eff6ff", iconColor: "#2563eb" },
+      { iconBg: "#ecfdf5", iconColor: "#059669" },
+      { iconBg: "#fff7ed", iconColor: "#ea580c" },
+      { iconBg: "#f5f3ff", iconColor: "#7c3aed" },
+      { iconBg: "#fef2f2", iconColor: "#dc2626" },
+      { iconBg: "#ecfeff", iconColor: "#0891b2" },
+    ];
+    return recentAppsRaw.map((r, i) => {
+      const p = palette[i % palette.length];
+      return {
+        appId: String(r.appId),
+        label: r.appName,
+        iconBg: p.iconBg,
+        iconColor: p.iconColor,
+      };
+    });
+  }, [recentAppsRaw]);
+
+  const selectedUsageAppOption = useMemo(
+    () => usageAppOptions.find((o) => o.appId === selectedUsageAppId) ?? null,
+    [usageAppOptions, selectedUsageAppId],
+  );
+
+  const selectedUsageAppLabel = useMemo(
+    () => selectedUsageAppOption?.label?.trim() || "App",
+    [selectedUsageAppOption],
+  );
+
+  const engageUsagePrefetch = useCallback(() => {
+    setUsagePrefetchEngaged((v) => (v ? v : true));
+  }, []);
+
+  useEffect(() => {
+    if (showDashboardSkeleton || !initialDashboardLoadDone || usagePrefetchEngaged) {
+      return undefined;
+    }
+    const el = appUsageBlockRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return undefined;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setUsagePrefetchEngaged(true);
+        }
+      },
+      { threshold: 0.08, rootMargin: "0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [showDashboardSkeleton, initialDashboardLoadDone, usagePrefetchEngaged]);
+
+  useEffect(() => {
+    if (!usageAppPickerOpen) return undefined;
+    const onDown = (e) => {
+      if (
+        usageAppPickerRef.current &&
+        !usageAppPickerRef.current.contains(e.target)
+      ) {
+        setUsageAppPickerOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [usageAppPickerOpen]);
+
+  useEffect(() => {
+    if (usageAppOptions.length === 0) {
+      if (selectedUsageAppId) setSelectedUsageAppId("");
+      return;
+    }
+    const ok = usageAppOptions.some((o) => o.appId === selectedUsageAppId);
+    if (ok) return;
+    let preferred = "";
+    try {
+      preferred = String(
+        window.localStorage.getItem(USAGE_APP_STORAGE_KEY) || "",
+      ).trim();
+    } catch {
+      preferred = "";
+    }
+    const okPreferred =
+      preferred && usageAppOptions.some((o) => o.appId === preferred);
+    setSelectedUsageAppId(
+      okPreferred ? preferred : usageAppOptions[0].appId,
+    );
+  }, [usageAppOptions, selectedUsageAppId]);
+
+  const firstRecentAppId = useMemo(
+    () => (recentAppsRaw.length ? String(recentAppsRaw[0].appId) : ""),
+    [recentAppsRaw],
+  );
+
+  useEffect(() => {
+    if (prevUsagePrefetchTokenRef.current !== token) {
+      prevUsagePrefetchTokenRef.current = token;
+      setUsagePrefetchEngaged(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!usagePrefetchEngaged || !firstRecentAppId) return undefined;
+    const range = "7d";
+    const cacheKey = `${firstRecentAppId}\t${range}`;
+    if (usageDataCacheRef.current.get(cacheKey)) return undefined;
+    const inflightKey = usageInflightRequestKey(firstRecentAppId, range);
+    const interval = usageIntervalForRange(range);
+    const granularity = interval === "hour" ? "hour" : "day";
+    void coalesceUsageTimeseriesFetch(inflightKey, () =>
+      withRetryOnce(() =>
+        dashboardBackend.getAppUsageTimeseries(
+          firstRecentAppId,
+          range,
+          interval,
+          DASHBOARD_API_QUIET,
+        ),
+      ),
+    )
+      .then((body) => {
+        if (usageDataCacheRef.current.get(cacheKey)) return;
+        const normalized = normalizeUsageTimeseriesPayload(body, granularity);
+        usageDataCacheRef.current.set(cacheKey, normalized);
+      })
+      .catch(() => {});
+    return undefined;
+  }, [firstRecentAppId, usagePrefetchEngaged]);
+
+  useEffect(() => {
+    if (!selectedUsageAppId) {
+      setUsageSeriesRows([]);
+      setUsageChartError("");
+      setUsageChartLoading(false);
+      setUsageChartRetrying(false);
+      return undefined;
+    }
+    const interval = usageIntervalForRange(usageRange);
+    const granularity = interval === "hour" ? "hour" : "day";
+    const cacheKey = `${selectedUsageAppId}\t${usageRange}`;
+    const cached = usageDataCacheRef.current.get(cacheKey);
+    if (cached) {
+      setUsageSeriesRows(cached);
+      setUsageChartError("");
+      setUsageChartLoading(false);
+      setUsageChartRetrying(false);
+      return undefined;
+    }
+
+    const gen = ++usageFetchGenRef.current;
+    const inflightKey = usageInflightRequestKey(selectedUsageAppId, usageRange);
+    setUsageChartLoading(true);
+    setUsageChartError("");
+    setUsageChartRetrying(false);
+
+    void coalesceUsageTimeseriesFetch(inflightKey, () =>
+      withRetryOnce(
+        () =>
+          dashboardBackend.getAppUsageTimeseries(
+            selectedUsageAppId,
+            usageRange,
+            interval,
+            DASHBOARD_API_QUIET,
+          ),
+        {
+          onRetrying: () => setUsageChartRetrying(true),
+        },
+      ),
+    )
+      .then((body) => {
+        if (DEBUG_DASHBOARD && gen === usageFetchGenRef.current) {
+          // eslint-disable-next-line no-console
+          console.log("Usage API response:", body);
+        }
+        if (gen !== usageFetchGenRef.current) return;
+        const normalized = normalizeUsageTimeseriesPayload(body, granularity);
+        usageDataCacheRef.current.set(cacheKey, normalized);
+        setUsageSeriesRows(normalized);
+        setUsageChartError("");
+      })
+      .catch((err) => {
+        if (gen !== usageFetchGenRef.current) return;
+        setUsageChartError(
+          rejectionMessage(err, "Could not load app usage analytics."),
+        );
+        setUsageSeriesRows([]);
+      })
+      .finally(() => {
+        if (gen !== usageFetchGenRef.current) return;
+        setUsageChartLoading(false);
+        setUsageChartRetrying(false);
+      });
+
+    return undefined;
+  }, [selectedUsageAppId, usageRange, usageFetchVersion]);
 
   const filteredTransactions = query
     ? transactions.filter((item) =>
@@ -920,56 +1254,17 @@ export default function UserDashboard() {
     };
   }, []);
 
-  const loadHeaderNotifications = useCallback(async () => {
-    setNotifLoading(true);
-    try {
-      const page = await notificationsBackend.list({ page: 0, size: 20 });
-      setNotifications(mapNotificationRows(page));
-    } catch {
-      // Keep bell usable without noisy toasts on transient failures.
-    } finally {
-      setNotifLoading(false);
-    }
-  }, []);
+  const handleUdMarkAllRead = () => void markAllRead();
 
-  useEffect(() => {
-    void loadHeaderNotifications();
-  }, [loadHeaderNotifications]);
-
-  const handleUdMarkAllRead = async () => {
-    if (!notifications.some((n) => !n.read)) return;
-    try {
-      await notificationsBackend.readAll();
-      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-      showSuccess("All caught up");
-    } catch (e) {
-      showError(e?.message || "Could not mark all as read");
-    }
-  };
-
-  const handleUdDeleteNotif = async (e, id) => {
+  const handleUdDeleteNotif = (e, id) => {
     e.preventDefault();
     e.stopPropagation();
-    try {
-      await notificationsBackend.deleteById(id);
-      setNotifications((prev) => prev.filter((n) => n.id !== id));
-    } catch (err) {
-      showError(err?.message || "Could not remove notification");
-    }
+    void deleteOne(id);
   };
 
   const handleUdNotifNavigate = async (item) => {
     const id = item?.id;
-    if (id != null) {
-      setNotifications((prev) =>
-        prev.map((row) => (row.id === id ? { ...row, read: true } : row)),
-      );
-      try {
-        await notificationsBackend.markRead(id);
-      } catch (e) {
-        showError(e?.message || "Failed to mark as read");
-      }
-    }
+    if (id != null) await markOneRead(id);
     setShowNotifications(false);
     const target = item?.navigateTo;
     if (target && /^https?:\/\//i.test(target)) {
@@ -1010,7 +1305,7 @@ export default function UserDashboard() {
                 setShowAvatarMenu(false);
                 setShowNotifications((v) => {
                   const next = !v;
-                  if (next) void loadHeaderNotifications();
+                  if (next) void refreshNotifications({ force: true });
                   return next;
                 });
               }}
@@ -1028,11 +1323,11 @@ export default function UserDashboard() {
                 <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
                 <path d="M13.73 21a2 2 0 0 1-3.46 0" />
               </svg>
-              {notifications.filter((n) => !n.read).length > 0 && (
+              {inboxUnreadCount > 0 ? (
                 <span className="ud-notif-badge">
-                  {notifications.filter((n) => !n.read).length}
+                  {inboxUnreadCount > 99 ? "99+" : inboxUnreadCount}
                 </span>
-              )}
+              ) : null}
             </button>
 
             {showNotifications && (
@@ -1050,12 +1345,30 @@ export default function UserDashboard() {
                     </button>
                   ) : null}
                 </div>
-                {notifLoading && notifications.length === 0 ? (
+                {notifError ? (
                   <div className="ud-notif-placeholder">
-                    <p className="ud-notif-placeholder-title">Loading…</p>
+                    <p className="ud-notif-placeholder-title">{notifError}</p>
+                    <button
+                      type="button"
+                      className="ud-btn-outline"
+                      style={{ marginTop: 8 }}
+                      onClick={() => void refreshNotifications({ force: true })}
+                    >
+                      Retry
+                    </button>
                   </div>
                 ) : null}
-                {!notifLoading && notifications.length === 0 ? (
+                {inboxRetrying && notifLoading ? (
+                  <div className="ud-notif-retry-hint" role="status">
+                    Retrying…
+                  </div>
+                ) : null}
+                {notifLoading && notifications.length === 0 && !notifError ? (
+                  <div className="ud-notif-placeholder ud-notif-placeholder--sk">
+                    <NotificationSkeletonRows count={4} />
+                  </div>
+                ) : null}
+                {!notifLoading && notifications.length === 0 && !notifError ? (
                   <div className="ud-notif-placeholder">
                     <p className="ud-notif-placeholder-title">
                       No notifications yet
@@ -1218,24 +1531,29 @@ export default function UserDashboard() {
             Good Morning, {getGreetingFirstName(profile) || "there"} 👋
           </h1>
           <p>Here's a quick overview of your account.</p>
+          {bundleRetrying ? (
+            <p className="ud-dash-retrying" role="status">
+              Retrying…
+            </p>
+          ) : null}
           {lastUpdatedLabel ? (
             <p className="ud-dash-last-updated">{lastUpdatedLabel}</p>
           ) : null}
-          {dashboardError ? (
+          {hasAnySectionError ? (
             <div className="ud-dash-error-row">
-              <p className="ud-empty-state ud-dash-error-text">
-                {dashboardError}
+              <p className="ud-dash-partial-hint">
+                Some sections could not load. Details appear on each card below.
               </p>
               <button
                 type="button"
                 className="ud-btn-outline ud-dash-retry-btn"
-                onClick={() => loadDashboardData({ silent: false })}
+                onClick={() => loadDashboardData({ silent: false, force: true })}
                 disabled={dashboardRefreshing}
               >
                 {showRetrySpinner ? (
                   <span className="ud-dash-retry-spinner" aria-hidden />
                 ) : null}
-                Retry
+                Retry all
               </button>
             </div>
           ) : null}
@@ -1267,8 +1585,8 @@ export default function UserDashboard() {
       {/* ── BODY BENTO GRID ── */}
       <div className="ud-body ud-body--bento">
         <div
-          className="ud-stats-strip ud-bento-kpi"
-          aria-busy={dashboardRefreshing}
+          className={`ud-stats-strip ud-bento-kpi${showDashboardSkeleton ? " ud-stats-strip--loading" : ""}`}
+          aria-busy={showDashboardSkeleton || dashboardRefreshing}
         >
             <button
               className="ud-stat ud-stat-action"
@@ -1285,6 +1603,10 @@ export default function UserDashboard() {
               <h2>
                 {showDashboardSkeleton ? (
                   <span className="ud-stat-skeleton-line ud-stat-skeleton-line--value" />
+                ) : summaryLoadFailed ? (
+                  <span className="ud-stat-kpi-na" title={sectionErrors.summary}>
+                    —
+                  </span>
                 ) : (
                   `${totalApps} ${totalApps === 1 ? "App" : "Apps"}`
                 )}
@@ -1305,6 +1627,10 @@ export default function UserDashboard() {
               <h2>
                 {showDashboardSkeleton ? (
                   <span className="ud-stat-skeleton-line ud-stat-skeleton-line--value" />
+                ) : summaryLoadFailed ? (
+                  <span className="ud-stat-kpi-na" title={sectionErrors.summary}>
+                    —
+                  </span>
                 ) : (
                   `${activeSubscriptions} Subscribed`
                 )}
@@ -1321,6 +1647,10 @@ export default function UserDashboard() {
               <h2>
                 {showDashboardSkeleton ? (
                   <span className="ud-stat-skeleton-line ud-stat-skeleton-line--value" />
+                ) : sectionErrors.tickets ? (
+                  <span className="ud-stat-kpi-na" title={sectionErrors.tickets}>
+                    —
+                  </span>
                 ) : ticketsKpiCount !== null ? (
                   String(ticketsKpiCount)
                 ) : (
@@ -1336,34 +1666,159 @@ export default function UserDashboard() {
         </div>
 
         <div
-          className="ud-card ud-usage-card ud-bento-chart"
+          className="ud-card ud-usage-card ud-bento-chart ud-usage-card--app-analytics"
           aria-busy={showDashboardSkeleton}
         >
             <div className="ud-usage-head">
               <h3 className="ud-card-h" style={{ margin: 0 }}>
-                Usage Overview
+                App usage analytics
               </h3>
-              <div className="ud-usage-pills">
-                <span>Last 7 days · from transactions</span>
-              </div>
+              <div className="ud-usage-pills" />
             </div>
+
             {showDashboardSkeleton ? (
-              <ChartSkeleton />
+              <ChartSkeleton matchUsageChartHeight />
             ) : (
-              <UsageChart series={txChartSeries} />
+              <div className="ud-app-usage-block" ref={appUsageBlockRef}>
+                <div className="ud-app-usage-toolbar">
+                  <div className="ud-app-usage-field" ref={usageAppPickerRef}>
+                    <span className="ud-app-usage-label" id="ud-app-usage-app-lbl">
+                      App
+                    </span>
+                    <div className="ud-app-usage-picker">
+                      <button
+                        type="button"
+                        className="ud-app-usage-picker-btn"
+                        aria-labelledby="ud-app-usage-app-lbl"
+                        aria-haspopup="listbox"
+                        aria-expanded={usageAppPickerOpen}
+                        disabled={usageAppOptions.length === 0}
+                        onClick={() =>
+                          setUsageAppPickerOpen((v) => {
+                            const next = !v;
+                            if (next) engageUsagePrefetch();
+                            return next;
+                          })
+                        }
+                      >
+                        {selectedUsageAppOption ? (
+                          <>
+                            <span className="ud-app-usage-picker-ico" aria-hidden>
+                              <AppGridIcon
+                                bg={selectedUsageAppOption.iconBg}
+                                color={selectedUsageAppOption.iconColor}
+                              />
+                            </span>
+                            <span className="ud-app-usage-picker-label">
+                              {selectedUsageAppOption.label}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="ud-app-usage-picker-label">No apps</span>
+                        )}
+                        <span className="ud-app-usage-picker-chev" aria-hidden>
+                          ▾
+                        </span>
+                      </button>
+                      {usageAppPickerOpen && usageAppOptions.length > 0 ? (
+                        <ul
+                          className="ud-app-usage-picker-list"
+                          role="listbox"
+                          aria-label="Choose app"
+                        >
+                          {usageAppOptions.map((o) => (
+                            <li key={o.appId} role="none">
+                              <button
+                                type="button"
+                                role="option"
+                                aria-selected={o.appId === selectedUsageAppId}
+                                className={`ud-app-usage-picker-item${
+                                  o.appId === selectedUsageAppId
+                                    ? " ud-app-usage-picker-item--active"
+                                    : ""
+                                }`}
+                                onClick={() => {
+                                  setSelectedUsageAppId(o.appId);
+                                  recordDashboardUsageAppPick(o.appId);
+                                  try {
+                                    window.localStorage.setItem(
+                                      USAGE_APP_STORAGE_KEY,
+                                      o.appId,
+                                    );
+                                  } catch {
+                                    /* private mode */
+                                  }
+                                  setUsageAppPickerOpen(false);
+                                }}
+                              >
+                                <span className="ud-app-usage-picker-ico" aria-hidden>
+                                  <AppGridIcon bg={o.iconBg} color={o.iconColor} />
+                                </span>
+                                <span className="ud-app-usage-picker-item-text">
+                                  {o.label}
+                                </span>
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div
+                    className="ud-app-usage-ranges"
+                    role="group"
+                    aria-label="Usage time range"
+                  >
+                    {[
+                      { id: "24h", label: "24H" },
+                      { id: "7d", label: "7D" },
+                      { id: "30d", label: "30D" },
+                    ].map((r) => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        className={`ud-app-usage-range${usageRange === r.id ? " ud-app-usage-range--active" : ""}`}
+                        onClick={() => {
+                          engageUsagePrefetch();
+                          setUsageRange(r.id);
+                        }}
+                        disabled={usageAppOptions.length === 0}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                {usageChartError ? (
+                  <p className="ud-section-error ud-section-error--compact" role="alert">
+                    {usageChartError}
+                  </p>
+                ) : null}
+                {usageChartRetrying ? (
+                  <p className="ud-app-usage-retry" role="status">
+                    Retrying…
+                  </p>
+                ) : null}
+                {usageAppOptions.length === 0 ? (
+                  <p className="ud-app-usage-empty" role="status">
+                    Add or open apps to see usage analytics here.
+                  </p>
+                ) : usageChartLoading ? (
+                  <ChartSkeleton matchUsageChartHeight />
+                ) : !usageChartError && usageSeriesRows.length === 0 ? (
+                  <p className="ud-app-usage-empty" role="status">
+                    No usage data for selected period
+                  </p>
+                ) : !usageChartError ? (
+                  <Suspense fallback={<ChartSkeleton matchUsageChartHeight />}>
+                    <AppUsageChart
+                      rows={usageSeriesRows}
+                      appName={selectedUsageAppLabel}
+                    />
+                  </Suspense>
+                ) : null}
+              </div>
             )}
-            <div className="ud-chart-legend">
-              <div>
-                <span className="ud-ldot ud-ldot-blue" />
-                {showDashboardSkeleton
-                  ? "Loading chart…"
-                  : `${txChartSeries.totalHits} transaction${txChartSeries.totalHits === 1 ? "" : "s"} in window`}
-              </div>
-              <div>
-                <span className="ud-ldot ud-ldot-teal" />
-                {`Daily count · up to ${DASHBOARD_TXN_PAGE_SIZE} loaded`}
-              </div>
-            </div>
           </div>
 
         <div
@@ -1385,12 +1840,19 @@ export default function UserDashboard() {
                 Export CSV
               </button>
             </div>
+            {!showDashboardSkeleton && sectionErrors.transactions ? (
+              <p className="ud-section-error ud-section-error--compact" role="alert">
+                {sectionErrors.transactions}
+              </p>
+            ) : null}
             <ul className="ud-txn-list ud-bento-txn-list">
               {showTxnSkeleton ? <TxnListSkeletonRows count={6} /> : null}
               {!showDashboardSkeleton && filteredTransactions.length === 0 ? (
                 <li className="ud-empty-state ud-empty-state--stack" role="status">
                   <span className="ud-empty-state-title">
-                    {query ? "No matching transactions" : "No transactions yet"}
+                    {query
+                      ? "No matching transactions"
+                      : "No transactions yet. Start using apps to see activity here."}
                   </span>
                   <span className="ud-empty-state-sub">
                     {query
@@ -1421,6 +1883,11 @@ export default function UserDashboard() {
                 ))}
             </ul>
 
+            {txnRetrying ? (
+              <p className="ud-txn-retry-hint" role="status">
+                Retrying…
+              </p>
+            ) : null}
             {!showDashboardSkeleton && transactionsTotalPages > 1 ? (
               <div className="ud-txn-pagination" role="navigation" aria-label="Transactions pagination">
                 <button
@@ -1458,38 +1925,55 @@ export default function UserDashboard() {
               aria-busy={showDashboardSkeleton}
             >
               <h3 className="ud-card-h">Recently Accessed Apps</h3>
+              {!showDashboardSkeleton && sectionErrors.recentApps ? (
+                <p className="ud-section-error ud-section-error--compact" role="alert">
+                  {sectionErrors.recentApps}
+                </p>
+              ) : null}
               <div className="ud-apps-grid">
                 {showDashboardSkeleton ? <AppsGridSkeleton /> : null}
-                {!showDashboardSkeleton && filteredRecentApps.length === 0 ? (
+                {!showDashboardSkeleton &&
+                !sectionErrors.recentApps &&
+                recentAppsForGrid.length === 0 ? (
                   <p
                     className="ud-empty-state ud-empty-state--stack ud-empty-state--block"
                     role="status"
                   >
                     <span className="ud-empty-state-title">
-                      {query ? "No apps match your search" : "No apps to show"}
+                      {query ? "No apps match your search" : "No recent apps yet"}
                     </span>
                     <span className="ud-empty-state-sub">
                       {query
                         ? "Clear the search or try another app name."
-                        : "Recently opened apps will list here when available from your workspace."}
+                        : "Apps you open will appear here with a quick link."}
                     </span>
                   </p>
                 ) : null}
                 {!showDashboardSkeleton &&
-                  filteredRecentApps.map((app, i) => (
-                  <div className="ud-app-entry" key={i}>
-                    <AppGridIcon bg={app.iconBg} color={app.iconColor} />
-                    <div className="ud-app-meta">
-                      <p>{app.name}</p>
-                      <small>{app.time}</small>
+                  recentAppsForGrid.map((app) => (
+                    <div className="ud-app-entry" key={app.key}>
+                      <AppGridIcon bg={app.iconBg} color={app.iconColor} />
+                      <div className="ud-app-meta">
+                        <p>{app.name}</p>
+                        <small>{app.time}</small>
+                      </div>
+                      <button
+                        type="button"
+                        className="ud-btn-open"
+                        onClick={() => {
+                          const appUrl = app.appUrl;
+                          if (appUrl?.startsWith("http")) {
+                            window.open(appUrl, "_blank", "noopener,noreferrer");
+                          } else if (appUrl?.startsWith("/")) {
+                            navigate(appUrl);
+                          } else {
+                            navigate("/all-apps");
+                          }
+                        }}
+                      >
+                        Open
+                      </button>
                     </div>
-                    <button
-                      className="ud-btn-open"
-                      onClick={() => navigate("/all-apps")}
-                    >
-                      Open
-                    </button>
-                  </div>
                   ))}
               </div>
             </div>
@@ -1526,8 +2010,13 @@ export default function UserDashboard() {
                 <h3 className="ud-card-h" style={{ margin: 0 }}>
                   Recent Activity
                 </h3>
-                <span className="ud-muted-xs">From GET /activity (falls back to transactions & tickets)</span>
+                <span className="ud-muted-xs">Recent account activity</span>
               </div>
+              {!showDashboardSkeleton && sectionErrors.activity ? (
+                <p className="ud-section-error ud-section-error--compact" role="alert">
+                  {sectionErrors.activity}
+                </p>
+              ) : null}
               <ul className="ud-ra-list">
                 {showDashboardSkeleton ? (
                   <ActivitySkeletonRows count={6} />
@@ -1555,7 +2044,16 @@ export default function UserDashboard() {
                       <span>{item.text}</span>
                       {item.status && (
                         <span
-                          className={`ud-pill ud-pill-${item.status.toLowerCase()}`}
+                          className={(() => {
+                            const slug = String(item.status)
+                              .toLowerCase()
+                              .replace(/[^a-z0-9]+/g, "-")
+                              .replace(/^-|-$/g, "");
+                            const tone = ["paid", "failed", "open", "pending"].includes(slug)
+                              ? slug
+                              : "pending";
+                            return `ud-pill ud-pill-${tone}`;
+                          })()}
                         >
                           {item.status}
                         </span>
@@ -1576,7 +2074,13 @@ export default function UserDashboard() {
                   <span className="ud-new-badge">New</span>
                   <span>🚀</span>
                 </div>
-                <button className="ud-btn-outline">View All Updates</button>
+                <button
+                  type="button"
+                  className="ud-btn-outline"
+                  onClick={() => navigate("/settings")}
+                >
+                  View All Updates
+                </button>
               </div>
               <ul className="ud-wn-list">
                 {WHATS_NEW.map((item, i) => (

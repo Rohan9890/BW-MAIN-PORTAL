@@ -3,9 +3,26 @@ import { useNavigate } from "react-router-dom";
 import { normalizeProfilePayload, useAuth } from "../context/AuthContext";
 import { kycBackend, profileBackend } from "../services/backendApis";
 import { getApiOrigin } from "../services/apiConfig";
+import { invalidateDashboardData } from "../services/dashboardInvalidate";
 import { showError, showSuccess } from "../services/toast";
 import { maskDocumentNumber, safeUpper } from "../utils/mask";
 import "./Profile.css";
+
+const CONTACT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Normalize & validate new email or phone for OTP contact update */
+function validateContactUpdateInput(kind, raw) {
+  if (kind === "email") {
+    const value = String(raw || "").trim();
+    if (!value) return { error: "Email is required." };
+    if (!CONTACT_EMAIL_RE.test(value)) return { error: "Enter a valid email address." };
+    return { value };
+  }
+  const digits = String(raw || "").replace(/\D/g, "");
+  if (!digits) return { error: "Phone number is required." };
+  if (digits.length !== 10) return { error: "Enter a 10-digit phone number." };
+  return { value: digits };
+}
 
 export default function Profile() {
   const [profile, setProfile] = useState(null);
@@ -24,8 +41,111 @@ export default function Profile() {
   const [photoUploading, setPhotoUploading] = useState(false);
   const [kycUploading, setKycUploading] = useState(false);
   const [kycResubmitting, setKycResubmitting] = useState(false);
+  const [contactModalOpen, setContactModalOpen] = useState(false);
+  const [contactKind, setContactKind] = useState("email");
+  const [contactStep, setContactStep] = useState(1);
+  const [contactInput, setContactInput] = useState("");
+  const [contactOtp, setContactOtp] = useState("");
+  const [contactFieldError, setContactFieldError] = useState("");
+  const [contactApiError, setContactApiError] = useState("");
+  const [contactInitLoading, setContactInitLoading] = useState(false);
+  const [contactVerifyLoading, setContactVerifyLoading] = useState(false);
+  const [contactResendLoading, setContactResendLoading] = useState(false);
   const navigate = useNavigate();
   const { token: authToken, hydrateProfile, logout } = useAuth();
+
+  const contactModalBusy =
+    contactInitLoading || contactVerifyLoading || contactResendLoading;
+
+  const closeContactModal = () => {
+    setContactModalOpen(false);
+    setContactStep(1);
+    setContactInput("");
+    setContactOtp("");
+    setContactFieldError("");
+    setContactApiError("");
+  };
+
+  const openContactModal = (kind) => {
+    setContactKind(kind === "phone" ? "phone" : "email");
+    setContactStep(1);
+    setContactInput("");
+    setContactOtp("");
+    setContactFieldError("");
+    setContactApiError("");
+    setContactModalOpen(true);
+  };
+
+  const sendContactOtp = async () => {
+    const parsed = validateContactUpdateInput(contactKind, contactInput);
+    if (parsed.error) {
+      setContactFieldError(parsed.error);
+      return;
+    }
+    setContactFieldError("");
+    setContactApiError("");
+    setContactInitLoading(true);
+    try {
+      const payload =
+        contactKind === "email" ? { email: parsed.value } : { phone: parsed.value };
+      await profileBackend.updateContactInit(payload);
+      setContactStep(2);
+    } catch (e) {
+      setContactApiError(e?.message || "Could not send OTP");
+    } finally {
+      setContactInitLoading(false);
+    }
+  };
+
+  const verifyContactUpdate = async () => {
+    const otpRaw = String(contactOtp || "").trim();
+    if (!otpRaw) {
+      setContactFieldError("OTP is required.");
+      return;
+    }
+    const parsed = validateContactUpdateInput(contactKind, contactInput);
+    if (parsed.error) {
+      setContactFieldError(parsed.error);
+      return;
+    }
+    setContactFieldError("");
+    setContactApiError("");
+    setContactVerifyLoading(true);
+    try {
+      const base =
+        contactKind === "email" ? { email: parsed.value } : { phone: parsed.value };
+      await profileBackend.updateContactVerify({ ...base, otp: otpRaw });
+      showSuccess("Contact updated successfully");
+      closeContactModal();
+      await fetchProfile();
+      invalidateDashboardData("profile-contact");
+    } catch (e) {
+      setContactApiError(e?.message || "Verification failed");
+    } finally {
+      setContactVerifyLoading(false);
+    }
+  };
+
+  const resendContactOtp = async () => {
+    const parsed = validateContactUpdateInput(contactKind, contactInput);
+    if (parsed.error) {
+      setContactFieldError(parsed.error);
+      return;
+    }
+    setContactFieldError("");
+    setContactApiError("");
+    setContactResendLoading(true);
+    try {
+      const payload =
+        contactKind === "email" ? { email: parsed.value } : { phone: parsed.value };
+      await profileBackend.updateContactInit(payload);
+      showSuccess("OTP sent");
+    } catch (e) {
+      setContactApiError(e?.message || "Could not resend OTP");
+    } finally {
+      setContactResendLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (!authToken) {
@@ -151,6 +271,7 @@ export default function Profile() {
       showSuccess("Profile updated");
       setEditMode(false);
       await fetchProfile(); // refresh from GET (single source of truth)
+      invalidateDashboardData("profile-update");
     } catch (e) {
       showError(e?.message || "Failed to update profile");
     } finally {
@@ -233,6 +354,7 @@ export default function Profile() {
       showSuccess("Profile photo updated");
       cancelPhoto();
       await fetchProfile();
+      invalidateDashboardData("profile-photo");
     } catch (e) {
       const status = Number(e?.status) || 0;
       if (status >= 500) {
@@ -511,12 +633,34 @@ export default function Profile() {
                   </div>
 
                   <div className="pf-field">
-                    <div className="pf-label">Email</div>
+                    <div className="pf-label-row">
+                      <div className="pf-label">Email</div>
+                      <button
+                        type="button"
+                        className="pf-btn pf-btn--ghost pf-btn--sm"
+                        onClick={() => openContactModal("email")}
+                        disabled={contactModalBusy}
+                      >
+                        Change
+                      </button>
+                    </div>
                     <div className="pf-value">{email || "—"}</div>
                   </div>
 
                   <div className="pf-field">
-                    <div className="pf-label">Phone</div>
+                    <div className="pf-label-row">
+                      <div className="pf-label">Phone</div>
+                      {!editMode ? (
+                        <button
+                          type="button"
+                          className="pf-btn pf-btn--ghost pf-btn--sm"
+                          onClick={() => openContactModal("phone")}
+                          disabled={contactModalBusy}
+                        >
+                          Change
+                        </button>
+                      ) : null}
+                    </div>
                     {!editMode ? (
                       <div className="pf-value">{phone || "—"}</div>
                     ) : (
@@ -777,6 +921,199 @@ export default function Profile() {
             </div>
           </section>
           </div>
+        </div>
+
+        <UpdateContactModal
+          open={contactModalOpen}
+          kind={contactKind}
+          step={contactStep}
+          inputValue={contactInput}
+          otpValue={contactOtp}
+          fieldError={contactFieldError}
+          apiError={contactApiError}
+          initLoading={contactInitLoading}
+          verifyLoading={contactVerifyLoading}
+          resendLoading={contactResendLoading}
+          busy={contactModalBusy}
+          onClose={() => {
+            if (contactModalBusy) return;
+            closeContactModal();
+          }}
+          onKindChange={(next) => {
+            setContactKind(next);
+            setContactFieldError("");
+            setContactApiError("");
+            setContactInput("");
+          }}
+          onInputChange={(v) => {
+            setContactInput(v);
+            setContactFieldError("");
+            setContactApiError("");
+          }}
+          onOtpChange={(v) => {
+            setContactOtp(v);
+            setContactFieldError("");
+            setContactApiError("");
+          }}
+          onStepBack={() => {
+            setContactStep(1);
+            setContactOtp("");
+            setContactFieldError("");
+            setContactApiError("");
+          }}
+          onSendOtp={() => void sendContactOtp()}
+          onVerify={() => void verifyContactUpdate()}
+          onResend={() => void resendContactOtp()}
+        />
+      </div>
+    </div>
+  );
+}
+
+function UpdateContactModal({
+  open,
+  kind,
+  step,
+  inputValue,
+  otpValue,
+  fieldError,
+  apiError,
+  initLoading,
+  verifyLoading,
+  resendLoading,
+  busy,
+  onClose,
+  onKindChange,
+  onInputChange,
+  onOtpChange,
+  onStepBack,
+  onSendOtp,
+  onVerify,
+  onResend,
+}) {
+  if (!open) return null;
+
+  const title = step === 1 ? "Update email or phone" : "Enter OTP";
+  const subtitle =
+    step === 1
+      ? "Choose what to update, enter the new value, then send an OTP."
+      : kind === "email"
+        ? "Enter the code sent to verify your new email."
+        : "Enter the code sent to verify your new phone number.";
+
+  return (
+    <div className="pf-modal-backdrop" role="dialog" aria-modal="true" aria-label={title}>
+      <div className="pf-modal">
+        <div className="pf-modal-head">
+          <div style={{ minWidth: 0 }}>
+            <div className="pf-modal-title">{title}</div>
+            <div className="pf-modal-subtitle">{subtitle}</div>
+          </div>
+          <button
+            type="button"
+            className="pf-modal-close"
+            onClick={onClose}
+            disabled={busy}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div className="pf-modal-body">
+          {step === 1 ? (
+            <>
+              <div className="pf-contact-kind" role="tablist" aria-label="Contact type">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={kind === "email"}
+                  className={`pf-contact-kind-btn ${kind === "email" ? "pf-contact-kind-btn--active" : ""}`}
+                  onClick={() => onKindChange("email")}
+                  disabled={initLoading}
+                >
+                  Email
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={kind === "phone"}
+                  className={`pf-contact-kind-btn ${kind === "phone" ? "pf-contact-kind-btn--active" : ""}`}
+                  onClick={() => onKindChange("phone")}
+                  disabled={initLoading}
+                >
+                  Phone
+                </button>
+              </div>
+              <div className="pf-label">{kind === "email" ? "New email" : "New phone"}</div>
+              <input
+                className={`pf-input ${fieldError && step === 1 ? "pf-input--error" : ""}`}
+                type={kind === "email" ? "email" : "tel"}
+                inputMode={kind === "phone" ? "numeric" : "email"}
+                autoComplete={kind === "email" ? "email" : "tel"}
+                placeholder={kind === "email" ? "you@example.com" : "10-digit mobile number"}
+                value={inputValue}
+                onChange={(e) => onInputChange(e.target.value)}
+                disabled={initLoading}
+              />
+              {fieldError && step === 1 ? <div className="pf-error-text">{fieldError}</div> : null}
+              {apiError ? <div className="pf-inline-error" style={{ marginTop: 10 }}>{apiError}</div> : null}
+              <div className="pf-modal-actions">
+                <button type="button" className="pf-btn pf-btn--ghost" onClick={onClose} disabled={initLoading}>
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="pf-btn pf-btn--primary"
+                  onClick={onSendOtp}
+                  disabled={initLoading}
+                >
+                  {initLoading ? "Sending…" : "Send OTP"}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="pf-label">One-time password</div>
+              <input
+                className={`pf-input ${fieldError && step === 2 ? "pf-input--error" : ""}`}
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="Enter OTP"
+                value={otpValue}
+                onChange={(e) => onOtpChange(e.target.value)}
+                disabled={verifyLoading}
+              />
+              {fieldError && step === 2 ? <div className="pf-error-text">{fieldError}</div> : null}
+              {apiError ? <div className="pf-inline-error" style={{ marginTop: 10 }}>{apiError}</div> : null}
+              <div className="pf-modal-actions">
+                <button
+                  type="button"
+                  className="pf-btn pf-btn--ghost"
+                  onClick={onStepBack}
+                  disabled={verifyLoading || resendLoading}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  className="pf-btn pf-btn--ghost"
+                  onClick={onResend}
+                  disabled={verifyLoading || resendLoading}
+                >
+                  {resendLoading ? "Sending…" : "Resend OTP"}
+                </button>
+                <button
+                  type="button"
+                  className="pf-btn pf-btn--primary"
+                  onClick={onVerify}
+                  disabled={verifyLoading}
+                >
+                  {verifyLoading ? "Verifying…" : "Verify & Update"}
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -45,7 +45,8 @@ async function readJsonSafe(res) {
   }
 }
 
-async function unwrapBackendEnvelope(res) {
+async function unwrapBackendEnvelope(res, unwrapOptions = {}) {
+  const { suppressGlobalServerErrorToast } = unwrapOptions || {};
   // apiFetch returns null on 401 and handles redirect/logout.
   if (!res) throw toError("Session expired. Please login again.", { status: 401 });
 
@@ -53,7 +54,7 @@ async function unwrapBackendEnvelope(res) {
   if (!res.ok) {
     const fallback = `HTTP ${res.status}`;
     const message = buildApiErrorMessage(payload, fallback);
-    if (res.status >= 500) {
+    if (res.status >= 500 && !suppressGlobalServerErrorToast) {
       showError(message !== fallback ? message : "Server error. Please try again shortly.");
     }
     throw toError(message, { status: res.status, payload });
@@ -80,7 +81,7 @@ async function unwrapBackendEnvelope(res) {
  * Returns `data` directly.
  */
 export async function backendJson(path, options = {}) {
-  const { json, ...fetchOptions } = options || {};
+  const { json, suppressGlobalServerErrorToast, ...fetchOptions } = options || {};
   const requestOptions = json
     ? {
         ...fetchOptions,
@@ -90,7 +91,7 @@ export async function backendJson(path, options = {}) {
     : fetchOptions;
 
   const res = await apiFetch(path, requestOptions);
-  return unwrapBackendEnvelope(res);
+  return unwrapBackendEnvelope(res, { suppressGlobalServerErrorToast });
 }
 
 export async function backendPost(path, body) {

@@ -1,5 +1,5 @@
 /**
- * Normalizes GET /notifications paginated and array shapes for UI lists.
+ * Normalizes GET /notifications/my paginated and array shapes for UI lists.
  */
 export function extractNotificationList(page) {
   if (page == null) return [];

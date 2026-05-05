@@ -2,13 +2,12 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useBrand } from "../context/BrandContext";
 import { getGreetingFirstName, useAuth } from "../context/AuthContext";
-import { applicationBackend, notificationsBackend } from "../services/backendApis";
-import {
-  extractNotificationList,
-  resolveNotificationNav,
-} from "../services/notificationUtils";
+import { useNotificationInbox } from "../context/NotificationInboxContext";
+import { applicationBackend } from "../services/backendApis";
+import { resolveNotificationNav } from "../services/notificationUtils";
 import { dashboardApi } from "../services";
 import { PageEmpty, PageError, PageLoading } from "../components/PageStates";
+import "./Home.css";
 
 function StatusPill({ status }) {
   if (!status) return null;
@@ -78,6 +77,11 @@ function greetingPrefix() {
 export default function Home() {
   const { brand, defaultBrand } = useBrand();
   const { profile, initializing } = useAuth();
+  const {
+    notifications: inboxNotifications,
+    unreadCount: unreadNotifCount,
+    markOneRead,
+  } = useNotificationInbox();
   const greetingDevLogOnce = useRef(false);
   const navigate = useNavigate();
   const chartGradId = useId().replace(/:/g, "");
@@ -85,8 +89,6 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [homeData, setHomeData] = useState({});
-  const [notifPreview, setNotifPreview] = useState([]);
-  const [unreadNotifCount, setUnreadNotifCount] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -95,16 +97,10 @@ export default function Home() {
       setLoading(true);
       setError("");
       try {
-        const [response, notifPage] = await Promise.all([
-          dashboardApi.getHomeData(),
-          notificationsBackend.list({ page: 0, size: 6 }).catch(() => null),
-        ]);
+        const response = await dashboardApi.getHomeData();
         if (!isMounted) return;
 
         setHomeData(response || {});
-        const list = extractNotificationList(notifPage);
-        setNotifPreview(list.slice(0, 4));
-        setUnreadNotifCount(list.filter((n) => !(n.read ?? n.isRead)).length);
       } catch (serviceError) {
         if (!isMounted) return;
         setError(serviceError?.message || "Unable to load dashboard.");
@@ -119,6 +115,14 @@ export default function Home() {
 
     return () => {
       isMounted = false;
+    };
+  }, []);
+
+  // Home-only styling hook (no app logic/APIs affected): allows CSS to target header on this route only.
+  useEffect(() => {
+    document.documentElement.classList.add("page-home");
+    return () => {
+      document.documentElement.classList.remove("page-home");
     };
   }, []);
 
@@ -172,18 +176,9 @@ export default function Home() {
   };
 
   const handleNotifRowClick = async (n) => {
-    if (n?.id) {
-      try {
-        await notificationsBackend.markRead(n.id);
-        setUnreadNotifCount((c) => Math.max(0, Number(c) - 1));
-        setNotifPreview((prev) =>
-          prev.map((x) => (x.id === n.id ? { ...x, read: true, isRead: true } : x)),
-        );
-      } catch {
-        // ignore
-      }
-    }
-    const target = resolveNotificationNav(n);
+    if (n?.id != null) await markOneRead(n.id);
+    const target =
+      n?.navigateTo || (n?.raw ? resolveNotificationNav(n.raw) : resolveNotificationNav(n));
     if (target && /^https?:\/\//i.test(target)) {
       window.open(target, "_blank", "noopener,noreferrer");
       return;
@@ -196,14 +191,8 @@ export default function Home() {
   };
 
   const notifRows = useMemo(
-    () =>
-      (Array.isArray(notifPreview) ? notifPreview : []).map((n) => ({
-        id: n.id,
-        text: n.title || n.message || n.text || "Notification",
-        time: n.createdAt ? new Date(n.createdAt).toLocaleString() : "",
-        read: Boolean(n.read),
-      })),
-    [notifPreview],
+    () => inboxNotifications.slice(0, 4),
+    [inboxNotifications],
   );
 
   const filteredApps = useMemo(() => {
@@ -399,38 +388,15 @@ export default function Home() {
           background: #fff;
           box-shadow: 0 0 0 3px rgba(37,99,235,0.1), 0 2px 8px rgba(15,23,42,0.04);
         }
-        .overview-grid {
-          display: grid;
-          grid-template-columns: repeat(5, minmax(0, 1fr));
-          gap: 12px;
-        }
-        .bottom-grid {
-          display: grid;
-          grid-template-columns: repeat(5, minmax(0, 1fr));
-          gap: 12px;
-        }
         @media (max-width: 1200px) {
-          .overview-grid, .bottom-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-          .span-3, .span-4, .span-2, .right-col { grid-column: auto !important; grid-row: auto !important; }
+          .span-3, .span-4, .span-2 { grid-column: auto !important; grid-row: auto !important; }
         }
         @media (max-width: 760px) {
-          .overview-grid, .bottom-grid, .apps-grid { grid-template-columns: 1fr !important; }
-          .top-banner { flex-direction: column; align-items: stretch; }
+          .apps-grid { grid-template-columns: 1fr !important; }
         }
       `}</style>
 
-      <section
-        className="home-card top-banner"
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: 16,
-          padding: "22px 24px",
-          background: "linear-gradient(135deg, #ffffff 0%, #f0f6ff 100%)",
-          borderBottom: "1px solid rgba(37,99,235,0.1)",
-        }}
-      >
+      <section className="home-card top-banner">
         <div>
           <h1
             style={{
@@ -652,12 +618,7 @@ export default function Home() {
             type="button"
             className="stat-card interactive-stat"
             onClick={() => navigate(item.route)}
-            style={{
-              padding: 20,
-              textAlign: "left",
-              border: "1px solid rgba(37, 99, 235, 0.1)",
-              ["--stat-color"]: item.accent,
-            }}
+            style={{ ["--stat-color"]: item.accent }}
           >
             <p
               style={{
@@ -708,16 +669,7 @@ export default function Home() {
           </button>
         ))}
 
-        <div
-          className="home-card right-col"
-          style={{
-            gridColumn: 4,
-            gridRow: "1 / span 3",
-            padding: 20,
-            display: "grid",
-            gap: 12,
-          }}
-        >
+        <div className="home-card right-col">
           <div
             style={{
               display: "flex",
@@ -907,10 +859,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div
-          className="home-card right-col"
-          style={{ gridColumn: 5, gridRow: "1 / span 3", padding: 20 }}
-        >
+        <div className="home-card right-col">
           <div
             style={{
               display: "flex",
@@ -1032,7 +981,7 @@ export default function Home() {
 
         <div
           className="home-card span-2"
-          style={{ gridColumn: "1 / span 1", gridRow: 2, padding: 20 }}
+          style={{ gridColumn: "1 / span 1", gridRow: 2, padding: 16 }}
         >
           <div
             style={{
@@ -1095,7 +1044,7 @@ export default function Home() {
 
         <div
           className="home-card span-2"
-          style={{ gridColumn: "2 / span 2", gridRow: 2, padding: 20 }}
+          style={{ gridColumn: "2 / span 2", gridRow: 2, padding: 16 }}
         >
           <div
             style={{
@@ -1154,7 +1103,7 @@ export default function Home() {
 
         <div
           className="home-card span-3"
-          style={{ gridColumn: "1 / span 3", gridRow: 3, padding: 20 }}
+          style={{ gridColumn: "1 / span 3", gridRow: 3, padding: 16 }}
         >
           <div
             style={{
@@ -1234,7 +1183,7 @@ export default function Home() {
       <section className="bottom-grid">
         <div
           className="home-card span-3"
-          style={{ gridColumn: "1 / span 3", padding: 20 }}
+          style={{ gridColumn: "1 / span 3", padding: 16 }}
         >
           <div
             style={{
@@ -1445,10 +1394,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div
-          className="home-card right-col"
-          style={{ gridColumn: 4, padding: 20 }}
-        >
+        <div className="home-card right-col">
           <div
             style={{
               display: "flex",
@@ -1541,15 +1487,8 @@ export default function Home() {
           </div>
         </div>
 
-        <div
-          style={{
-            gridColumn: 5,
-            display: "grid",
-            gap: 12,
-            alignContent: "start",
-          }}
-        >
-          <div className="home-card right-col" style={{ padding: 20 }}>
+        <div style={{ display: "grid", gap: 12, alignContent: "start" }}>
+          <div className="home-card right-col">
             <div
               style={{
                 display: "flex",
@@ -1611,7 +1550,7 @@ export default function Home() {
                   <button
                     key={String(n.id)}
                     type="button"
-                    onClick={() => handleNotifRowClick({ id: n.id })}
+                    onClick={() => void handleNotifRowClick(n)}
                     style={{
                       textAlign: "left",
                       border: "1px solid #f1f5f9",
@@ -1666,7 +1605,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="home-card right-col" style={{ padding: 20 }}>
+          <div className="home-card right-col">
           <div
             style={{
               display: "flex",

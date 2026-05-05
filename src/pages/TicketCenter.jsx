@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageEmpty, PageError, PageLoading } from "../components/PageStates";
 import { ticketsBackend } from "../services/backendApis";
+import "./Support.css";
 
 function normalizeTicketsList(payload) {
   if (!payload) return [];
@@ -65,7 +66,7 @@ export default function TicketCenter() {
   }, [tickets]);
 
   return (
-    <div style={{ maxWidth: 980, margin: "0 auto", padding: 4 }}>
+    <div className="support-page" style={{ maxWidth: 980, margin: "0 auto", padding: 4 }}>
       <div
         style={{
           display: "flex",
@@ -77,10 +78,10 @@ export default function TicketCenter() {
         }}
       >
         <div>
-          <h1 style={{ margin: 0, fontSize: 26, letterSpacing: "-0.3px" }}>
+          <h1 className="support-title" style={{ margin: 0, fontSize: 26, letterSpacing: "-0.3px" }}>
             Support Tickets
           </h1>
-          <div style={{ color: "#64748b", fontSize: 13, marginTop: 4 }}>
+          <div className="support-subtitle" style={{ marginTop: 4 }}>
             Track your requests and updates from our support team.
           </div>
         </div>
@@ -89,6 +90,7 @@ export default function TicketCenter() {
             type="button"
             onClick={() => void load()}
             disabled={loading}
+            className="support-action"
             style={ghostBtnStyle(loading)}
           >
             {loading ? "Refreshing..." : "Refresh"}
@@ -96,6 +98,7 @@ export default function TicketCenter() {
           <button
             type="button"
             onClick={() => navigate("/support/ticket")}
+            className="support-btn"
             style={primaryBtnStyle}
           >
             Raise ticket
@@ -104,6 +107,7 @@ export default function TicketCenter() {
       </div>
 
       <div
+        className="support-card"
         style={{
           background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
           border: "1px solid rgba(37,99,235,0.12)",
@@ -137,6 +141,7 @@ export default function TicketCenter() {
                   key={String(id)}
                   type="button"
                   onClick={() => navigate(`/support/ticket/${encodeURIComponent(String(id))}`)}
+                  className="support-ticket"
                   style={{
                     border: "none",
                     background: "transparent",

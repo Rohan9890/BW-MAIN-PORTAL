@@ -120,10 +120,12 @@ export async function uploadProfilePhoto(file) {
 }
 
 // ================= DASHBOARD =================
+/** @deprecated Legacy paths — use `dashboardBackend` / `dashboardApi` (`GET /dashboard/summary`, `GET /dashboard/transactions?page=&size=`). */
 export async function getDashboardSummary(userId) {
   return apiCall(`/dashboard/summary/${userId}`, "GET");
 }
 
+/** @deprecated Legacy paths — use `dashboardBackend.getTransactions`. */
 export async function getDashboardTransactions(userId) {
   return apiCall(`/dashboard/transactions/${userId}`, "GET");
 }

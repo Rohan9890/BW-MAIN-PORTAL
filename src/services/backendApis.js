@@ -49,18 +49,57 @@ export const profileBackend = {
     }
     return backendMultipart("/profile/upload-photo", fd);
   },
+  /** POST /profile/update-contact/init — send OTP to new email or phone */
+  updateContactInit(payload) {
+    return backendJson("/profile/update-contact/init", {
+      method: "POST",
+      json: payload ?? {},
+    });
+  },
+  /** POST /profile/update-contact/verify — confirm OTP and apply contact change */
+  updateContactVerify(payload) {
+    return backendJson("/profile/update-contact/verify", {
+      method: "POST",
+      json: payload ?? {},
+    });
+  },
 };
 
 export const dashboardBackend = {
-  getSummary() {
-    return backendJson("/dashboard/summary");
+  /** @param {object} [opts] — optional `suppressGlobalServerErrorToast` for resilient dashboards */
+  getSummary(opts = {}) {
+    return backendJson("/dashboard/summary", { method: "GET", ...opts });
   },
-  getTransactions({ page = 0, size = 80 } = {}) {
+  getTransactions({ page = 0, size = 80, ...opts } = {}) {
     const qs = new URLSearchParams({
       page: String(page),
       size: String(size),
     });
-    return backendJson(`/dashboard/transactions?${qs.toString()}`);
+    return backendJson(`/dashboard/transactions?${qs.toString()}`, {
+      method: "GET",
+      ...opts,
+    });
+  },
+  /** GET /dashboard/recent-apps */
+  getRecentApps(opts = {}) {
+    return backendJson("/dashboard/recent-apps", { method: "GET", ...opts });
+  },
+  /**
+   * GET /dashboard/app-usage-timeseries
+   * @param {string|number} appId
+   * @param {string} range e.g. 24h, 7d, 30d
+   * @param {string} interval e.g. hour, day
+   */
+  getAppUsageTimeseries(appId, range, interval, opts = {}) {
+    const qs = new URLSearchParams({
+      appId: String(appId),
+      range: String(range ?? ""),
+      interval: String(interval ?? ""),
+    });
+    return backendJson(`/dashboard/app-usage-timeseries?${qs.toString()}`, {
+      method: "GET",
+      ...opts,
+    });
   },
 };
 
@@ -106,10 +145,10 @@ export const kycBackend = {
 };
 
 export const notificationsBackend = {
-  /** GET /notifications — paginated inbox */
-  list({ page = 0, size = 20 } = {}) {
+  /** GET /notifications/my — paginated inbox */
+  list({ page = 0, size = 20, ...opts } = {}) {
     const qs = new URLSearchParams({ page: String(page), size: String(size) });
-    return backendJson(`/notifications?${qs.toString()}`, { method: "GET" });
+    return backendJson(`/notifications/my?${qs.toString()}`, { method: "GET", ...opts });
   },
   markRead(id) {
     return backendJson(`/notifications/${encodeURIComponent(String(id))}/read`, {
@@ -128,10 +167,10 @@ export const notificationsBackend = {
 };
 
 export const activityBackend = {
-  /** GET /activity — paginated activity feed (Spring-style page or raw array). */
-  list({ page = 0, size = 10 } = {}) {
+  /** GET /activity/my — paginated activity feed (Spring-style page or raw array). */
+  list({ page = 0, size = 10, ...opts } = {}) {
     const qs = new URLSearchParams({ page: String(page), size: String(size) });
-    return backendJson(`/activity?${qs.toString()}`, { method: "GET" });
+    return backendJson(`/activity/my?${qs.toString()}`, { method: "GET", ...opts });
   },
   /** @deprecated use list() — alias for backward compatibility */
   my(opts) {
@@ -146,8 +185,8 @@ export const ticketsBackend = {
     }
     return backendPost("/tickets/create", payload ?? {});
   },
-  my() {
-    return backendJson("/tickets/my", { method: "GET" });
+  my(opts = {}) {
+    return backendJson("/tickets/my", { method: "GET", ...opts });
   },
   getById(id) {
     return backendJson(`/tickets/${encodeURIComponent(String(id))}`, { method: "GET" });
