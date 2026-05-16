@@ -83,3 +83,15 @@ export function logDevApiTransport({
 export function isAuthTokenDebugEnabled() {
   return import.meta.env.DEV && import.meta.env.VITE_DEBUG_AUTH_TOKEN === "true";
 }
+
+function trimEnv(value) {
+  return String(value ?? "").trim();
+}
+
+/**
+ * Admin auth secret used by `/api/v1.0/admin/auth/login`.
+ * Kept in env (`VITE_ADMIN_SECRET`) so it is not hardcoded in UI components.
+ */
+export function getAdminSecret() {
+  return trimEnv(import.meta.env.VITE_ADMIN_SECRET);
+}

@@ -1,29 +1,54 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   appBackend,
   applicationBackend,
   favoritesBackend,
 } from "../services/backendApis";
+import { invalidateDashboardData } from "../services/dashboardInvalidate";
 import { showError, showSuccess } from "../services/toast";
-import { emitMyAppsChanged } from "../services/uiEvents";
+import { emitMyAppsChanged, onAppsCatalogChanged } from "../services/uiEvents";
+import { isAppVisibleOnAllAppsPage, openUserCatalogApp } from "../utils/appNavigation";
 import "./AllApps.css";
 
+function appIdKey(appId) {
+  if (appId == null || appId === "") return null;
+  const n = Number(appId);
+  return Number.isFinite(n) ? n : String(appId);
+}
+
 const normalizeApps = (items) =>
-  (Array.isArray(items) ? items : []).map((app) => ({
-    appId: app.appId,
-    appType: app.appType,
-    name: app.appName,
-    description: app.appText || "—",
-    detail: app.appText || "—",
-    appUrl: app.appUrl,
-    appLogo: app.appLogo,
-    status: String(app.status || "").toLowerCase(),
-    createdAt: app.createdAt,
-  }));
+  (Array.isArray(items) ? items : []).map((app) => {
+    const raw = app || {};
+    const externalUrl = String(raw.externalUrl || "").trim();
+    const routePath = String(raw.routePath || raw.route || "").trim();
+    let appUrl = String(raw.appUrl || raw.url || "").trim();
+    if (!appUrl) {
+      if (externalUrl) appUrl = externalUrl;
+      else if (routePath) appUrl = routePath.startsWith("/") ? routePath : `/${routePath}`;
+    }
+    return {
+      appId: raw.appId ?? raw.id,
+      appType: raw.appType ?? raw.category ?? "APP",
+      name: raw.appName ?? raw.name ?? "App",
+      description: raw.appText ?? raw.description ?? "—",
+      detail: raw.appText ?? raw.description ?? "—",
+      appUrl,
+      appLogo: raw.appLogo ?? raw.logoUrl,
+      status: String(raw.status || "").toLowerCase(),
+      visibility: String(raw.visibility || "PUBLIC"),
+      featured: Boolean(raw.featured),
+      routePath,
+      externalUrl,
+      createdAt: raw.createdAt,
+    };
+  });
 
 export default function AllApps() {
+  const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [apps, setApps] = useState([]);
+  const [catalogReload, setCatalogReload] = useState(0);
   const [selectedId, setSelectedId] = useState(null);
   const [viewMode, setViewMode] = useState("grid");
   const [loading, setLoading] = useState(true);
@@ -41,6 +66,8 @@ export default function AllApps() {
     };
   }, []);
 
+  useEffect(() => onAppsCatalogChanged(() => setCatalogReload((n) => n + 1)), []);
+
   useEffect(() => {
     let active = true;
     (async () => {
@@ -53,23 +80,6 @@ export default function AllApps() {
           applicationBackend.my().catch(() => []),
         ]);
         if (!active) return;
-        if (import.meta.env.DEV) {
-          const sample = Array.isArray(list) ? list.slice(0, 5) : [];
-          console.info(
-            "[AllApps] /application/list sample keys",
-            sample.map((x) => Object.keys(x || {}).sort()),
-          );
-          console.info(
-            "[AllApps] /application/list sample",
-            sample.map((x) => ({
-              appId: x?.appId,
-              appName: x?.appName,
-              appType: x?.appType,
-              status: x?.status,
-              appUrl: x?.appUrl,
-            })),
-          );
-        }
         const normalized = normalizeApps(list);
         setApps(normalized);
         setSelectedId(normalized[0]?.appId ?? null);
@@ -78,7 +88,7 @@ export default function AllApps() {
           (Array.isArray(favs) ? favs : [])
             .map((x) => x?.appId ?? x?.id ?? x)
             .filter((v) => v !== undefined && v !== null)
-            .map((v) => Number(v)),
+            .map((v) => (Number.isFinite(Number(v)) ? Number(v) : String(v))),
         );
         setFavoriteIds(favIds);
 
@@ -86,7 +96,7 @@ export default function AllApps() {
           (Array.isArray(mine) ? mine : [])
             .map((x) => x?.id ?? x?.appId)
             .filter((v) => v !== undefined && v !== null)
-            .map((v) => Number(v)),
+            .map((v) => (Number.isFinite(Number(v)) ? Number(v) : String(v))),
         );
         setMyAppIds(mineIds);
       } catch (e) {
@@ -99,16 +109,21 @@ export default function AllApps() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [catalogReload]);
+
+  const publicCatalogApps = useMemo(
+    () => apps.filter((a) => isAppVisibleOnAllAppsPage(a, myAppIds)),
+    [apps, myAppIds],
+  );
 
   const filteredApps = useMemo(
     () =>
-      apps.filter((app) =>
+      publicCatalogApps.filter((app) =>
         `${app.name} ${app.appType} ${app.description} ${app.status}`
           .toLowerCase()
           .includes(search.trim().toLowerCase()),
       ),
-    [apps, search],
+    [publicCatalogApps, search],
   );
 
   useEffect(() => {
@@ -126,10 +141,12 @@ export default function AllApps() {
     filteredApps.find((app) => app.appId === selectedId) || null;
 
   const toggleFavorite = async (appId) => {
+    const key = appIdKey(appId);
+    if (key == null) return;
     const next = new Set(favoriteIds);
-    const wasFav = next.has(Number(appId));
-    if (wasFav) next.delete(Number(appId));
-    else next.add(Number(appId));
+    const wasFav = next.has(key);
+    if (wasFav) next.delete(key);
+    else next.add(key);
     setFavoriteIds(next);
     try {
       if (wasFav) await favoritesBackend.remove(appId);
@@ -144,11 +161,14 @@ export default function AllApps() {
 
   const handleOpen = async (app) => {
     const appId = app?.appId;
-    const url = String(app?.appUrl || "").trim();
-    if (!appId || !url) return;
-    // Open should always work; backend call is best-effort.
-    window.open(url, "_blank", "noopener,noreferrer");
-    applicationBackend.open(appId).catch(() => {});
+    if (!appId) return;
+    const r = await openUserCatalogApp(app, {
+      navigate,
+      applicationBackend,
+      onAfterOpen: () => invalidateDashboardData("application-opened"),
+    });
+    if (!r.ok && r.reason === "unpublished") showError("This app is not available.");
+    else if (!r.ok && r.reason === "no-target") showError("No link is configured for this app.");
   };
 
   const handleSubscribe = async (app) => {
@@ -193,6 +213,8 @@ export default function AllApps() {
           appType: app?.appType,
           status: app?.status,
           appUrl: app?.appUrl,
+          routePath: app?.routePath,
+          externalUrl: app?.externalUrl,
           owned: myAppIds.has(id),
           decision: cta,
         });
@@ -341,7 +363,7 @@ export default function AllApps() {
           >
             {filteredApps.map((app) => {
               const statusTone = renderStatus(app.status);
-              const isFav = favoriteIds.has(Number(app.appId));
+              const isFav = favoriteIds.has(appIdKey(app.appId));
 
               return (
                 <div
@@ -500,10 +522,10 @@ export default function AllApps() {
                       }}
                       style={{
                         border: "1px solid #fecaca",
-                        background: favoriteIds.has(Number(app.appId))
+                        background: favoriteIds.has(appIdKey(app.appId))
                           ? "#fff1f2"
                           : "#fff",
-                        color: favoriteIds.has(Number(app.appId))
+                        color: favoriteIds.has(appIdKey(app.appId))
                           ? "#dc2626"
                           : "#64748b",
                         borderRadius: 8,
@@ -512,7 +534,7 @@ export default function AllApps() {
                         fontWeight: 600,
                       }}
                     >
-                      {favoriteIds.has(Number(app.appId))
+                      {favoriteIds.has(appIdKey(app.appId))
                         ? "Favorited"
                         : "Add to Favorites"}
                     </button>
@@ -564,15 +586,15 @@ export default function AllApps() {
                       padding: "8px 12px",
                       fontSize: 12,
                       fontWeight: 700,
-                      background: favoriteIds.has(Number(app.appId))
+                      background: favoriteIds.has(appIdKey(app.appId))
                         ? "#fee2e2"
                         : "#f1f5f9",
-                      color: favoriteIds.has(Number(app.appId))
+                      color: favoriteIds.has(appIdKey(app.appId))
                         ? "#991b1b"
                         : "#475569",
                     }}
                   >
-                    {favoriteIds.has(Number(app.appId))
+                    {favoriteIds.has(appIdKey(app.appId))
                       ? "Favorited"
                       : "Not Favorited"}
                   </span>
@@ -610,7 +632,7 @@ export default function AllApps() {
               </p>
               <p style={{ margin: "8px 0" }}>
                 <strong>Favorite:</strong>{" "}
-                {favoriteIds.has(Number(selectedApp.appId))
+                {favoriteIds.has(appIdKey(selectedApp.appId))
                   ? "Yes"
                   : "No"}
               </p>
@@ -620,10 +642,10 @@ export default function AllApps() {
                   onClick={() => void toggleFavorite(selectedApp.appId)}
                   style={{
                     border: "1px solid #fecaca",
-                    background: favoriteIds.has(Number(selectedApp.appId))
+                    background: favoriteIds.has(appIdKey(selectedApp.appId))
                       ? "#fff1f2"
                       : "#fff",
-                    color: favoriteIds.has(Number(selectedApp.appId))
+                    color: favoriteIds.has(appIdKey(selectedApp.appId))
                       ? "#dc2626"
                       : "#64748b",
                     borderRadius: 10,
@@ -632,7 +654,7 @@ export default function AllApps() {
                     fontWeight: 800,
                   }}
                 >
-                  {favoriteIds.has(Number(selectedApp.appId))
+                  {favoriteIds.has(appIdKey(selectedApp.appId))
                     ? "Remove Favorite"
                     : "Add to Favorites"}
                 </button>

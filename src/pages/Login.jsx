@@ -4,8 +4,9 @@ import Logo from "../components/Logo";
 import { useBrand } from "../context/BrandContext";
 import "./Login.css";
 import { useAuth } from "../context/AuthContext";
-import { authBackend } from "../services/backendApis";
-import { isAuthTokenDebugEnabled } from "../services/apiConfig";
+import { adminAuthBackend, authBackend } from "../services/backendApis";
+import { getApiErrorMessage } from "../services/backendClient";
+import { getAdminSecret, isAuthTokenDebugEnabled } from "../services/apiConfig";
 import { showSuccess, showError } from "../services/toast";
 
 /** Unwrap common backend shapes after `backendJson` envelope peel — trim once here. */
@@ -26,6 +27,26 @@ function extractVerifyOtpToken(data) {
   ).trim();
 }
 
+function extractVerifyOtpRole(data) {
+  if (data == null || typeof data !== "object") return "";
+  const nested = data.data && typeof data.data === "object" ? data.data : null;
+  const direct = data.role ?? nested?.role;
+  if (direct != null && String(direct).trim())
+    return String(direct).trim();
+  const auth =
+    data.authorities ??
+    nested?.authorities ??
+    data.roles ??
+    nested?.roles;
+  if (Array.isArray(auth) && auth.length) {
+    const first = auth[0];
+    if (typeof first === "string") return first.trim();
+    if (first && typeof first === "object" && typeof first.authority === "string")
+      return String(first.authority).trim();
+  }
+  return "";
+}
+
 function validateEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value || "").trim());
 }
@@ -40,6 +61,7 @@ export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
 
+  const [loginMode, setLoginMode] = useState("user"); // "user" | "admin"
   const [otpSent, setOtpSent] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -89,7 +111,7 @@ export default function Login() {
       setOtpSent(true);
     } catch (e) {
       const msg = e?.message?.toLowerCase().includes("verify")
-        ? "Please verify your email before login."
+        ? "Complete verification before login. Sign in with your password to receive a 6-digit code by email."
         : e?.message || "Login failed";
       setFormError(msg);
       showError(msg);
@@ -98,8 +120,73 @@ export default function Login() {
     }
   };
 
+  // ================= ADMIN LOGIN (SEND OTP) =================
+  const handleAdminLogin = async () => {
+    setFormError("");
+    setFieldErrors({});
+
+    if (!validateEmail(form.email)) {
+      setFieldErrors({ email: "Enter a valid email address." });
+      return;
+    }
+    if (!form.password.trim()) {
+      setFieldErrors({ password: "Password is required." });
+      return;
+    }
+
+    const secret = getAdminSecret();
+    if (!secret) {
+      const msg =
+        "Admin secret is not configured. Set VITE_ADMIN_SECRET and restart the dev server.";
+      setFormError(msg);
+      showError(msg);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await adminAuthBackend.login({
+        email: form.email.trim(),
+        password: form.password,
+        secret,
+      });
+
+      localStorage.setItem("admin_login_pending_email", form.email.trim());
+
+      showSuccess("OTP sent to your email");
+      setOtpSent(true);
+    } catch (e) {
+      const status = e?.status;
+      const rawMsg = getApiErrorMessage(e, "Admin login failed");
+      const lower = rawMsg.toLowerCase();
+      let msg = rawMsg;
+
+      if (status === 403) {
+        if (lower.includes("secret")) msg = "Invalid admin secret.";
+        else if (lower.includes("password")) msg = "Invalid admin password.";
+        else msg = "Forbidden. Check admin credentials and secret.";
+      } else if (
+        status === 401 ||
+        (status === 500 && (lower.includes("invalid password") || lower.includes("unauthorized")))
+      ) {
+        msg =
+          lower.includes("invalid password")
+            ? "Invalid admin password. The server rejected the password for this admin email (or the account is not an admin on this environment)."
+            : "Admin login was rejected by the server. Check that this email is an admin account on the backend and that admin secret/password match the deployed config.";
+      } else if (lower.includes("admin not found")) {
+        msg =
+          "No admin account exists for this email. Use the admin email registered on the server, or ask your team to create or seed that admin user.";
+      }
+
+      setFormError(msg);
+      showError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // ================= VERIFY OTP =================
-  const handleVerifyEmailOtp = async () => {
+  const handleVerifyLoginOtp = async () => {
     setFormError("");
     setFieldErrors({});
 
@@ -115,14 +202,19 @@ export default function Login() {
     try {
       /* OTP must run without a stale JWT — backend rejects with "session expired" otherwise. */
       localStorage.removeItem("ui-access-token");
+      localStorage.removeItem("ui-role");
 
       const data = await authBackend.verifyOtp({
         email,
         otp: form.otp.trim(),
       });
-      console.log("verify-otp response:", data);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.log("verify-otp response (dev only): keys", Object.keys(data || {}));
+      }
 
       const token = extractVerifyOtpToken(data);
+      const role = extractVerifyOtpRole(data);
       const userId = data?.userId ?? data?.data?.userId ?? "";
 
       if (!token) throw new Error("Invalid login response");
@@ -138,7 +230,7 @@ export default function Login() {
         console.groupEnd();
       }
 
-      await onLoginSuccess({ token, userId });
+      await onLoginSuccess({ token, userId, role });
 
       if (isAuthTokenDebugEnabled()) {
         const stored = localStorage.getItem("ui-access-token");
@@ -155,9 +247,17 @@ export default function Login() {
 
       showSuccess("Login successful");
       /** Navigate after token + profile hydrate complete — avoids racing global 401 handlers. */
-      navigate("/dashboard");
+      const normalizedRole = String(role || "").toUpperCase();
+      if (normalizedRole === "ROLE_ADMIN") {
+        navigate("/admin");
+      } else {
+        navigate("/dashboard");
+      }
     } catch (e) {
-      console.log("verify-otp error:", e);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.log("verify-otp error (dev only):", e?.status, e?.message);
+      }
       const p = e?.payload;
       const nested =
         p && typeof p === "object" && typeof p.data === "object" && p.data?.message;
@@ -172,6 +272,64 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  // ================= ADMIN VERIFY OTP =================
+  const handleVerifyAdminOtp = async () => {
+    setFormError("");
+    setFieldErrors({});
+
+    if (!validateOtp(form.otp)) {
+      setFieldErrors({ otp: "OTP must be 6 digits." });
+      return;
+    }
+
+    const email =
+      localStorage.getItem("admin_login_pending_email") || form.email.trim();
+
+    setLoading(true);
+    try {
+      /* OTP must run without a stale JWT — backend rejects with "session expired" otherwise. */
+      localStorage.removeItem("ui-access-token");
+      localStorage.removeItem("ui-role");
+
+      const data = await adminAuthBackend.verifyOtp({
+        email,
+        otp: form.otp.trim(),
+      });
+
+      // Defensive parsing: backend may return token/role at root OR wrapped in `data`.
+      // Supports both:
+      // - { data: { token, role } }
+      // - { token, role }
+      const token =
+        extractVerifyOtpToken(data) ?? data?.token ?? data?.data?.token ?? "";
+      const role = data?.role ?? data?.data?.role ?? "ROLE_ADMIN";
+      const userId = data?.userId ?? data?.data?.userId ?? "";
+
+      if (!token) throw new Error("Invalid login response");
+
+      await onLoginSuccess({ token, userId, role });
+
+      localStorage.removeItem("admin_login_pending_email");
+
+      showSuccess("Admin login successful");
+      navigate("/admin");
+    } catch (e) {
+      const status = e?.status;
+      const rawMsg = getApiErrorMessage(e, "Invalid OTP");
+      let msg = rawMsg;
+      if (status === 403) msg = rawMsg || "Forbidden. Invalid OTP or unauthorized.";
+      setFormError(msg);
+      showError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pendingEmailKey =
+    loginMode === "admin" ? "admin_login_pending_email" : "login_pending_email";
+  const pendingEmail =
+    localStorage.getItem(pendingEmailKey) || form.email;
 
   return (
     <div className="login-page">
@@ -231,6 +389,43 @@ export default function Login() {
             </p>
           </div>
 
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <button
+              type="button"
+              className={`btn ${loginMode === "user" ? "btn-primary" : ""}`}
+              onClick={() => {
+                if (loginMode === "user") return;
+                setLoginMode("user");
+                setOtpSent(false);
+                setForm((p) => ({ ...p, otp: "" }));
+                setFieldErrors({});
+                setFormError("");
+                localStorage.removeItem("admin_login_pending_email");
+              }}
+              disabled={loading}
+              aria-pressed={loginMode === "user"}
+            >
+              User Login
+            </button>
+            <button
+              type="button"
+              className={`btn ${loginMode === "admin" ? "btn-primary" : ""}`}
+              onClick={() => {
+                if (loginMode === "admin") return;
+                setLoginMode("admin");
+                setOtpSent(false);
+                setForm((p) => ({ ...p, otp: "" }));
+                setFieldErrors({});
+                setFormError("");
+                localStorage.removeItem("login_pending_email");
+              }}
+              disabled={loading}
+              aria-pressed={loginMode === "admin"}
+            >
+              Admin Login
+            </button>
+          </div>
+
           {infoMessage && (
             <div
               style={{
@@ -254,7 +449,11 @@ export default function Login() {
               className="login-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                handleEmailLogin();
+                if (loginMode === "admin") {
+                  handleAdminLogin();
+                } else {
+                  handleEmailLogin();
+                }
               }}
             >
               <div className="login-input-block">
@@ -358,13 +557,17 @@ export default function Login() {
               className="login-form"
               onSubmit={(e) => {
                 e.preventDefault();
-                handleVerifyEmailOtp();
+                if (loginMode === "admin") {
+                  handleVerifyAdminOtp();
+                } else {
+                  handleVerifyLoginOtp();
+                }
               }}
             >
               <p className="login-otp-hint">
                 OTP sent to{" "}
                 <strong>
-                  {localStorage.getItem("login_pending_email") || form.email}
+                  {pendingEmail}
                 </strong>
               </p>
 
@@ -418,7 +621,7 @@ export default function Login() {
                   setForm((p) => ({ ...p, otp: "" }));
                   setFieldErrors({});
                   setFormError("");
-                  localStorage.removeItem("login_pending_email");
+                  localStorage.removeItem(pendingEmailKey);
                 }}
                 disabled={loading}
               >

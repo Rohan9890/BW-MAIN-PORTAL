@@ -2,7 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { PageEmpty, PageError, PageLoading } from "../components/PageStates";
 import { ticketsBackend } from "../services/backendApis";
+import {
+  getTicketStatusLabel,
+  getTicketStatusPillStyle,
+  normalizeTicketStatus,
+} from "../utils/ticketStatus";
 import "./Support.css";
+
+// Keep list reasonably fresh without spamming.
+const TICKETS_POLL_MS = 30_000;
 
 function normalizeTicketsList(payload) {
   if (!payload) return [];
@@ -17,42 +25,73 @@ function safeStr(v) {
   return s && s !== "null" ? s : "";
 }
 
-function statusPillStyle(status) {
-  const st = safeStr(status).toUpperCase();
-  if (st === "RESOLVED" || st === "CLOSED") {
-    return { background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" };
-  }
-  if (st === "OPEN" || st === "NEW") {
-    return { background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe" };
-  }
-  if (st === "PENDING") {
-    return { background: "#fef9c3", color: "#854d0e", border: "1px solid #fde68a" };
-  }
-  return { background: "#f1f5f9", color: "#0f172a", border: "1px solid #e2e8f0" };
-}
-
 export default function TicketCenter() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [tickets, setTickets] = useState([]);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const inFlightRef = useState(() => ({ active: false, seq: 0 }))[0];
 
-  const load = async () => {
-    setLoading(true);
-    setError("");
+  const load = async ({ initial = false } = {}) => {
+    if (inFlightRef.active) return;
+    inFlightRef.active = true;
+    const requestSeq = (inFlightRef.seq += 1);
+    if (initial) setLoading(true);
+    else setRefreshing(true);
     try {
       const data = await ticketsBackend.my();
+      // Ignore stale responses.
+      if (requestSeq !== inFlightRef.seq) return;
       setTickets(normalizeTicketsList(data));
+      setLastUpdatedAt(Date.now());
+      setError("");
     } catch (e) {
-      setTickets([]);
+      if (requestSeq !== inFlightRef.seq) return;
+      if (initial) setTickets([]);
       setError(e?.message || "Failed to load tickets.");
     } finally {
-      setLoading(false);
+      if (requestSeq === inFlightRef.seq) {
+        setLoading(false);
+        setRefreshing(false);
+      }
+      inFlightRef.active = false;
     }
   };
 
   useEffect(() => {
-    void load();
+    void load({ initial: true });
+  }, []);
+
+  useEffect(() => {
+    let intervalId = null;
+    const clear = () => {
+      if (intervalId != null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+    const tick = () => {
+      if (document.visibilityState === "visible") {
+        void load({ initial: false });
+      }
+    };
+    const start = () => {
+      clear();
+      if (document.visibilityState !== "visible") return;
+      intervalId = window.setInterval(tick, TICKETS_POLL_MS);
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") clear();
+      else start();
+    };
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clear();
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, []);
 
   const sorted = useMemo(() => {
@@ -88,12 +127,12 @@ export default function TicketCenter() {
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button
             type="button"
-            onClick={() => void load()}
-            disabled={loading}
+            onClick={() => void load({ initial: false })}
+            disabled={loading || refreshing}
             className="support-action"
-            style={ghostBtnStyle(loading)}
+            style={ghostBtnStyle(loading || refreshing)}
           >
-            {loading ? "Refreshing..." : "Refresh"}
+            {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button
             type="button"
@@ -106,16 +145,15 @@ export default function TicketCenter() {
         </div>
       </div>
 
-      <div
-        className="support-card"
-        style={{
-          background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
-          border: "1px solid rgba(37,99,235,0.12)",
-          boxShadow: "0 10px 26px rgba(15,23,42,0.08)",
-          borderRadius: 16,
-          overflow: "hidden",
-        }}
-      >
+      <div className="ticket-inbox">
+        <div className="ticket-inbox-head">
+          <strong>Inbox</strong>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span style={{ fontSize: 11, fontWeight: 900, color: "#64748b" }}>
+              {lastUpdatedAt ? "Synced" : ""}
+            </span>
+          </div>
+        </div>
         {loading ? <PageLoading title="Loading tickets..." /> : null}
         {!loading && error ? <PageError message={error} onRetry={() => void load()} /> : null}
         {!loading && !error && sorted.length === 0 ? (
@@ -126,76 +164,65 @@ export default function TicketCenter() {
         ) : null}
 
         {!loading && !error && sorted.length > 0 ? (
-          <div style={{ display: "grid" }}>
+          <div className="ticket-inbox-list">
             {sorted.map((t, idx) => {
               const id = t?.id ?? t?.ticketId ?? t?.code ?? idx;
               const title =
                 safeStr(t?.title) || safeStr(t?.subject) || safeStr(t?.summary) || "Support ticket";
-              const status = safeStr(t?.status) || "OPEN";
+              const status = normalizeTicketStatus(t?.status);
+              const statusLabel = getTicketStatusLabel(status);
               const updated =
                 t?.updatedAt || t?.lastUpdatedAt || t?.createdAt
                   ? new Date(t?.updatedAt || t?.lastUpdatedAt || t?.createdAt).toLocaleString()
                   : "";
+              const updatedMs = new Date(t?.updatedAt || t?.lastUpdatedAt || t?.createdAt || 0).getTime() || 0;
+              const recent = updatedMs && Date.now() - updatedMs < 24 * 60 * 60 * 1000;
+              const preview =
+                safeStr(t?.latestMessage) ||
+                safeStr(t?.lastMessage) ||
+                safeStr(t?.lastReply) ||
+                safeStr(t?.description || t?.message) ||
+                "";
               return (
                 <button
                   key={String(id)}
                   type="button"
-                  onClick={() => navigate(`/support/ticket/${encodeURIComponent(String(id))}`)}
-                  className="support-ticket"
-                  style={{
-                    border: "none",
-                    background: "transparent",
-                    textAlign: "left",
-                    padding: "14px 16px",
-                    cursor: "pointer",
-                    display: "grid",
-                    gap: 8,
-                    borderBottom:
-                      idx === sorted.length - 1 ? "none" : "1px solid rgba(148,163,184,0.18)",
-                  }}
+                  onClick={() => navigate(`/tickets/${encodeURIComponent(String(id))}`)}
+                  className="ticket-row"
+                  style={{ borderBottom: idx === sorted.length - 1 ? "none" : undefined }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div
-                        style={{
-                          fontWeight: 950,
-                          color: "#0f172a",
-                          whiteSpace: "nowrap",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                        }}
-                      >
-                        {title}
-                      </div>
-                      <div style={{ color: "#64748b", fontSize: 12, marginTop: 3 }}>
-                        {safeStr(id) ? `Ticket #${id}` : "Ticket"}{" "}
-                        {updated ? `· Updated ${updated}` : ""}
+                  <div className="ticket-row-top">
+                    <div className="ticket-row-title">
+                      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                        <span className={`ticket-row-dot ${recent ? "recent" : ""}`} aria-hidden="true" />
+                        <div style={{ minWidth: 0 }}>
+                          <strong>{title}</strong>
+                          <div className="ticket-row-meta">
+                            <span>{safeStr(id) ? `Ticket #${id}` : "Ticket"}</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <span
-                      style={{
-                        ...statusPillStyle(status),
-                        padding: "6px 10px",
-                        borderRadius: 999,
-                        fontSize: 11,
-                        fontWeight: 900,
-                        letterSpacing: "0.3px",
-                        flexShrink: 0,
-                      }}
-                    >
-                      {String(status).toUpperCase()}
-                    </span>
+                    <div style={{ display: "grid", justifyItems: "end", gap: 6 }}>
+                      <span style={{ ...getTicketStatusPillStyle(status), padding: "6px 10px", borderRadius: 999, fontSize: 11, fontWeight: 950, letterSpacing: "0.3px" }}>
+                        {statusLabel}
+                      </span>
+                      <span className="ticket-row-time">{updated ? `Updated ${updated}` : ""}</span>
+                    </div>
                   </div>
-                  {safeStr(t?.description || t?.message) ? (
-                    <div style={{ color: "#334155", fontSize: 13, lineHeight: 1.4 }}>
-                      {safeStr(t?.description || t?.message)}
-                    </div>
-                  ) : null}
+                  {preview ? <div className="ticket-row-preview">{preview}</div> : null}
                 </button>
               );
             })}
           </div>
         ) : null}
+      </div>
+      <div style={{ marginTop: 10, color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+        {refreshing
+          ? "Checking for updates…"
+          : lastUpdatedAt
+            ? "Updated just now"
+            : ""}
       </div>
     </div>
   );

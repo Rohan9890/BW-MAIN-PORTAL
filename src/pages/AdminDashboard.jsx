@@ -1,8 +1,29 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useBrand } from "../context/BrandContext";
 import { getInitials, useAuth } from "../context/AuthContext";
-import { useAdminDashboard } from "../hooks/useAdminDashboard";
+import { adminDashboardApi } from "../services/adminDashboardApi";
+import { invalidateDashboardData } from "../services/dashboardInvalidate";
+import { showError, showSuccess } from "../services/toast";
+import {
+  getTicketStatusLabel,
+  getTicketStatusPillStyle,
+  normalizeTicketStatus,
+} from "../utils/ticketStatus";
+import TicketConversation from "../components/TicketConversation";
+import AdminKycDocPreviews from "../components/AdminKycDocPreviews";
+import AdminAppsSection from "../components/AdminAppsSection";
+import { mergeMessages, normalizeTicketResponse, normalizeTicketThread } from "../utils/ticketConversation";
+import {
+  KYC_CANONICAL,
+  canonicalizeKycStatus,
+  kycCanonicalLabel,
+  kycCanonicalSlug,
+  kycStatsFromNormalizedRows,
+  kycNormalizedRowToDetailPatch,
+  mergeAdminKycDetailRow,
+  normalizeAdminKycRow,
+} from "../utils/kycAdmin";
 import "./AdminDashboard.css";
 
 const ADMIN_SIDEBAR_ITEMS = [
@@ -33,6 +54,446 @@ const ADMIN_SIDEBAR_ITEMS = [
 
 const Y_AXIS_LABELS = ["10k", "5k"];
 const X_AXIS_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun"];
+
+const DASHBOARD_FETCH_MAX_ATTEMPTS = 3;
+/** Dashboard home / analytics: background refresh for summary + lists (not user growth). */
+const DASHBOARD_POLL_MS = 45_000;
+const KYC_ADMIN_POLL_MS = 60_000;
+const ACTION_MAX_ATTEMPTS = 2;
+const DASHBOARD_PANEL_MAX_ITEMS = 8;
+const KYC_ADMIN_PAGE_SIZE = 8;
+
+/** Synthetic IDs from `normalizeAdminKycRow` when backend omits an id — moderation actions stay disabled. */
+function adminKycRowHasActionableId(row) {
+  const id = String(row?.id ?? "").trim();
+  if (!id) return false;
+  return !/^kyc_\d+$/.test(id);
+}
+
+const ADMIN_STATS_TEMPLATE = [
+  {
+    label: "Total Users",
+    value: "0",
+    delta: "",
+    tone: "cool",
+    icon: "users",
+    points: "0,18 9,16 18,17 27,15 36,14 45,13 54,12 64,12 74,11 84,11 94,10 100,10",
+  },
+  {
+    label: "Active Users",
+    value: "0",
+    delta: "",
+    tone: "cool",
+    icon: "activity",
+    points: "0,19 9,18 18,17 27,16 36,15 45,14 54,13 64,12 74,12 84,11 94,11 100,10",
+  },
+  {
+    label: "Total Apps",
+    value: "0",
+    delta: "",
+    tone: "cool",
+    icon: "apps",
+    points: "0,17 9,16 18,16 27,15 36,14 45,14 54,13 64,12 74,12 84,11 94,11 100,10",
+  },
+  {
+    label: "Revenue",
+    value: "—",
+    delta: "",
+    tone: "mint",
+    icon: "billing",
+    points: "0,20 9,19 18,18 27,18 36,17 45,16 54,16 64,15 74,14 84,14 94,13 100,13",
+  },
+  {
+    label: "Open Tickets",
+    value: "0",
+    delta: "",
+    tone: "cool",
+    icon: "tickets",
+    points: "0,18 9,17 18,16 27,15 36,15 45,14 54,13 64,13 74,12 84,12 94,11 100,11",
+  },
+];
+
+function toStringSafe(value, fallback = "") {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return fallback;
+  return String(value);
+}
+
+function toFiniteNumber(value, fallback = 0) {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function toDateMs(value) {
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function formatLastUpdated(lastUpdatedAtMs) {
+  if (!Number.isFinite(lastUpdatedAtMs)) return "Last updated: —";
+  const diffMs = Date.now() - lastUpdatedAtMs;
+  if (!Number.isFinite(diffMs) || diffMs < 0) {
+    return `Last updated: ${new Date(lastUpdatedAtMs).toLocaleString()}`;
+  }
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "Last updated: just now";
+  if (mins < 60) return `Last updated: ${mins} min${mins === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `Last updated: ${hours} hr${hours === 1 ? "" : "s"} ago`;
+  return `Last updated: ${new Date(lastUpdatedAtMs).toLocaleString()}`;
+}
+
+function isServerUnavailableError(err) {
+  const msg = toStringSafe(err?.message, "").toLowerCase();
+  return (
+    !navigator.onLine ||
+    msg.includes("network") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("fetch") ||
+    msg.includes("timeout") ||
+    msg.includes("503") ||
+    msg.includes("502") ||
+    msg.includes("504") ||
+    msg.includes("service unavailable")
+  );
+}
+
+async function withRetry(fn, { maxAttempts, label }) {
+  let lastErr;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        // Keep retry transparent for debugging/ops without changing UX layout.
+        console.info(`[AdminDashboard] retrying ${label} (attempt ${attempt}/${maxAttempts})`);
+      }
+      return await fn({ attempt });
+    } catch (err) {
+      lastErr = err;
+      // Never retry auth / RBAC failures; avoid infinite loops for ROLE_USER on admin APIs.
+      if (err?.status === 401 || err?.status === 403) {
+        break;
+      }
+      if (attempt >= maxAttempts) break;
+      const delayMs = 400 * attempt;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
+function normalizeGrowthPoint(item, index) {
+  if (typeof item === "number") {
+    return { name: String(index), users: toFiniteNumber(item, 0) };
+  }
+  const date = toStringSafe(item?.date, "").trim();
+  const users = toFiniteNumber(item?.count, 0);
+  if (!date) return null;
+  return { name: date, users };
+}
+
+function firstNonEmptyActivityLabel(...candidates) {
+  for (const c of candidates) {
+    const s = toStringSafe(c, "").trim();
+    if (s) return s;
+  }
+  return "";
+}
+
+function normalizeActivityEntry(entry) {
+  if (!entry || typeof entry !== "object") return null;
+  const event = firstNonEmptyActivityLabel(
+    entry.event,
+    entry.title,
+    entry.action,
+    entry.description,
+    entry.message,
+    entry.type,
+  );
+  const meta = toStringSafe(entry?.meta, "").trim();
+  const time = toStringSafe(
+    entry?.time ?? entry?.createdAt ?? entry?.timestamp ?? entry?.at ?? "",
+  ).trim();
+  if (!event) return null;
+  return { event, meta, time };
+}
+
+/** Backend PATCH /admin/users/:id/status not wired via adminDashboardApi — keep false until integrated. */
+const ADMIN_USER_STATUS_UPDATE_AVAILABLE = false;
+/** Admin user edit UI not wired to a real endpoint. */
+const ADMIN_USER_EDIT_AVAILABLE = false;
+
+const UNNAMED_USER_LABEL = "Unnamed User";
+
+/** Phone fields aligned with `normalizeProfilePayload` in AuthContext. */
+function pickPhoneFromUserRecord(user) {
+  if (!user || typeof user !== "object") return "";
+  const nested = user.user && typeof user.user === "object" ? user.user : null;
+  const profile = user.profile && typeof user.profile === "object" ? user.profile : null;
+  const raw =
+    user.phoneNumber ??
+    user.phone ??
+    user.mobile ??
+    user.mobileNumber ??
+    nested?.phoneNumber ??
+    profile?.phoneNumber ??
+    "";
+  return String(raw || "").trim();
+}
+
+function pickOptionalTicketCount(user) {
+  const raw =
+    user?.openTicketsCount ??
+    user?.ticketCount ??
+    user?.supportTicketsCount ??
+    user?.ticketsOpenCount ??
+    null;
+  if (raw === undefined || raw === null || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+function pickKycPill(user) {
+  const profile = user?.profile && typeof user.profile === "object" ? user.profile : null;
+  const raw =
+    user?.kycStatus ??
+    profile?.kycStatus ??
+    (user?.kyc && typeof user.kyc === "object" ? user.kyc.status : null) ??
+    (typeof user?.kyc === "string" ? user.kyc : null) ??
+    user?.verificationStatus ??
+    "";
+  const trimmed = String(raw || "").trim();
+  const canon = canonicalizeKycStatus(
+    !trimmed || trimmed.toUpperCase() === "NULL" || trimmed.toUpperCase() === "UNDEFINED" ? "" : trimmed,
+  );
+  const slug = kycCanonicalSlug(canon);
+  return { key: slug, label: kycCanonicalLabel(canon), className: slug };
+}
+
+function resolveUserDisplayName(user) {
+  if (!user || typeof user !== "object") return UNNAMED_USER_LABEL;
+  const profile = user.profile && typeof user.profile === "object" ? user.profile : null;
+  const nested = user.user && typeof user.user === "object" ? user.user : null;
+  const partA = user.firstName != null ? String(user.firstName).trim() : "";
+  const partB = user.lastName != null ? String(user.lastName).trim() : "";
+  const fromParts = [partA, partB].filter(Boolean).join(" ").trim();
+  const candidates = [
+    user.name,
+    user.fullName,
+    user.username,
+    user.displayName,
+    fromParts,
+    profile?.name,
+    nested?.name,
+  ];
+  for (const c of candidates) {
+    const t = String(c ?? "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (
+      !t ||
+      t === "undefined" ||
+      t === "null" ||
+      /^undefined(\s+undefined)?$/i.test(t)
+    ) {
+      continue;
+    }
+    return t;
+  }
+  return UNNAMED_USER_LABEL;
+}
+
+function avatarInitialsFromDisplayName(displayName) {
+  const d = String(displayName || "").trim();
+  if (!d || d === UNNAMED_USER_LABEL) return "U";
+  return getInitials(d);
+}
+
+function pickAccountStatusMeta(user) {
+  if (!user || typeof user !== "object") {
+    return { key: "UNKNOWN", label: "Unknown", pillClass: "unknown" };
+  }
+  const locked =
+    user.locked === true ||
+    user.isLocked === true ||
+    user.accountLocked === true;
+  if (locked) return { key: "SUSPENDED", label: "Suspended", pillClass: "suspended" };
+
+  const sRaw = user.status ?? user.accountStatus;
+  if (sRaw !== undefined && sRaw !== null && String(sRaw).trim()) {
+    const u = String(sRaw).trim().toUpperCase();
+    if (u === "ACTIVE" || u === "ENABLED" || u === "ACTIVATED")
+      return { key: "ACTIVE", label: "Active", pillClass: "active" };
+    if (u === "INACTIVE" || u === "DISABLED" || u === "DEACTIVATED")
+      return { key: "INACTIVE", label: "Inactive", pillClass: "inactive" };
+    if (u === "BLOCKED" || u === "BANNED") return { key: "BLOCKED", label: "Blocked", pillClass: "blocked" };
+    if (u === "SUSPENDED") return { key: "SUSPENDED", label: "Suspended", pillClass: "suspended" };
+    if (u === "PENDING") return { key: "PENDING", label: "Pending", pillClass: "pending" };
+  }
+
+  if (user.isActive === true) return { key: "ACTIVE", label: "Active", pillClass: "active" };
+  if (user.isActive === false) return { key: "INACTIVE", label: "Inactive", pillClass: "inactive" };
+  if (user.enabled === true) return { key: "ACTIVE", label: "Active", pillClass: "active" };
+  if (user.enabled === false) return { key: "INACTIVE", label: "Inactive", pillClass: "inactive" };
+
+  return { key: "UNKNOWN", label: "Unknown", pillClass: "unknown" };
+}
+
+/**
+ * View Tickets search `q`: user id → email → display name.
+ * Disable when nothing usable (including “Unnamed User” alone).
+ */
+function pickTicketsNavQueryParts(rawUser) {
+  if (!rawUser || typeof rawUser !== "object") return { q: "", enabled: false };
+  const id = String(rawUser.id ?? rawUser.userId ?? "").trim();
+  const email = String(rawUser.email ?? rawUser.userEmail ?? "").trim();
+  const resolved = resolveUserDisplayName(rawUser).trim();
+  const name = resolved && resolved !== UNNAMED_USER_LABEL ? resolved : "";
+  const q = id || email || name || "";
+  const enabled = Boolean(id || email || name);
+  return { q, enabled };
+}
+
+function formatJoinedDate(raw) {
+  const s = toStringSafe(raw, "").trim();
+  if (!s) return "—";
+  const ms = Date.parse(s);
+  if (Number.isFinite(ms)) {
+    try {
+      return new Date(ms).toLocaleDateString();
+    } catch {
+      return s;
+    }
+  }
+  return s;
+}
+
+function normalizeAdminUserRow(user) {
+  const id = toStringSafe(user?.id ?? user?.userId, "").trim();
+  const displayName = resolveUserDisplayName(user);
+  const email = toStringSafe(user?.email ?? user?.userEmail, "").trim();
+  const joinedRaw = user?.joinedOn ?? user?.createdAt ?? user?.registeredAt ?? "";
+  const joinedOnDisplay = formatJoinedDate(joinedRaw);
+  const phoneRaw = pickPhoneFromUserRecord(user);
+  const phone = phoneRaw || "—";
+  const kycPill = pickKycPill(user);
+  const statusMeta = pickAccountStatusMeta(user);
+  const ticketCount = pickOptionalTicketCount(user);
+  const ticketsNav = pickTicketsNavQueryParts(user);
+  return {
+    ...user,
+    id: id || email || displayName || crypto.randomUUID?.() || `u_${Math.random()}`,
+    displayName,
+    name: displayName,
+    email: email || "—",
+    phone,
+    joinedOnDisplay,
+    /** Same formatted value as `joinedOnDisplay` for table cells that expect `joinedOn`. */
+    joinedOn: joinedOnDisplay,
+    kycPill,
+    statusMeta,
+    /** Back-compat with dashboard search / CSV — same as account status label. */
+    status: statusMeta.label,
+    ticketCount,
+    ticketsNav,
+    _raw: user,
+  };
+}
+
+/** Backend-agnostic primary id for routing + merge (never use empty string as a Map key). */
+function adminTicketPrimaryId(t) {
+  if (!t || typeof t !== "object") return "";
+  const z = t.id ?? t.ticketId ?? t.code ?? t.uuid ?? t.publicId ?? t.ticketNumber;
+  if (z === 0 || z === false) return String(z);
+  const s = String(z ?? "").trim();
+  if (!s || s === "undefined" || s === "null") return "";
+  return s;
+}
+
+/** Stable dedupe key for admin ticket rows (matches merge + list identity). */
+function adminTicketMergeKey(t) {
+  const pid = adminTicketPrimaryId(t);
+  if (pid) return pid;
+  const sub = String(t?.subject ?? t?.issue ?? "").trim().slice(0, 80);
+  const em = String(t?.userEmail ?? t?.email ?? "").trim().slice(0, 80);
+  const cr = String(t?.createdAt ?? t?.createdOn ?? t?.date ?? t?.time ?? "").trim();
+  return `~${sub}|${em}|${cr}`.replace(/\s+/g, " ");
+}
+
+function rawTicketCanonicalStatus(t) {
+  return normalizeTicketStatus(
+    t?.status ?? t?.ticketStatus ?? t?.state ?? t?.ticketState ?? "",
+  );
+}
+
+function normalizeAdminPriorityLabel(raw) {
+  const p = toStringSafe(raw, "Medium").trim();
+  if (!p) return "Medium";
+  const lower = p.toLowerCase();
+  if (lower === "low" || lower === "l" || lower === "p4" || lower === "p3") return "Low";
+  if (lower === "high" || lower === "urgent" || lower === "critical" || lower === "p1" || lower === "p0")
+    return "High";
+  if (lower === "medium" || lower === "normal" || lower === "med" || lower === "p2" || lower === "moderate")
+    return "Medium";
+  if (["Low", "Medium", "High"].includes(p)) return p;
+  return "Medium";
+}
+
+function mergeAdminTicketPages(prevList, incoming) {
+  const prev = Array.isArray(prevList) ? prevList : [];
+  if (prev.length > 0 && incoming.length === 0) return prev;
+  const map = new Map(prev.map((t) => [adminTicketMergeKey(t), t]));
+  incoming.forEach((t) => {
+    map.set(adminTicketMergeKey(t), t);
+  });
+  const out = Array.from(map.values());
+  return out;
+}
+
+function normalizeTicket(ticket) {
+  const primaryId = adminTicketPrimaryId(ticket);
+  const subject = toStringSafe(ticket?.subject ?? ticket?.issue ?? "", "").trim();
+  const id =
+    primaryId ||
+    subject ||
+    (typeof crypto !== "undefined" && crypto.randomUUID?.()) ||
+    `t_${Math.random()}`;
+  const userName = toStringSafe(ticket?.userName ?? ticket?.name ?? "", "").trim();
+  const userEmail = toStringSafe(ticket?.userEmail ?? ticket?.email ?? "", "").trim();
+  const priority = normalizeAdminPriorityLabel(ticket?.priority);
+  const statusRaw = toStringSafe(
+    ticket?.status ?? ticket?.ticketStatus ?? ticket?.state ?? ticket?.ticketState,
+    "OPEN",
+  ).trim();
+  const date = toStringSafe(ticket?.date ?? ticket?.createdAt ?? ticket?.time ?? "", "").trim();
+  const description = toStringSafe(ticket?.description, "").trim();
+  const conversation = Array.isArray(ticket?.conversation) ? ticket.conversation : [];
+  const safeConversation = conversation
+    .map((m, idx) => {
+      const mid = toStringSafe(m?.id, "").trim() || `${id || "t"}_${idx}`;
+      const text = toStringSafe(m?.text, "").trim();
+      const time = toStringSafe(m?.time, "").trim();
+      const sender = toStringSafe(m?.sender, "").trim();
+      if (!text) return null;
+      return { id: mid, text, time: time || "—", sender: sender || "user" };
+    })
+    .filter(Boolean);
+
+  const status = normalizeTicketStatus(statusRaw);
+
+  return {
+    ...ticket,
+    // IMPORTANT: keep stable ID so rows never "disappear" due to key drift across responses.
+    id,
+    subject: subject || "—",
+    userName: userName || "—",
+    userEmail: userEmail || "—",
+    priority,
+    status,
+    date: date || "—",
+    description: description || "—",
+    conversation: safeConversation,
+  };
+}
 
 function Icon({ name }) {
   const common = {
@@ -144,45 +605,451 @@ function Icon({ name }) {
 }
 
 function TicketBadge({ type, value }) {
+  if (type === "status") {
+    const canonical = normalizeTicketStatus(value);
+    const label = getTicketStatusLabel(canonical);
+    const pill = getTicketStatusPillStyle(canonical);
+    return (
+      <span
+        className={`ticket-badge ${type}`}
+        style={{
+          ...pill,
+          padding: "6px 10px",
+          borderRadius: 999,
+          fontSize: 11,
+          fontWeight: 900,
+          letterSpacing: "0.3px",
+        }}
+      >
+        {label}
+      </span>
+    );
+  }
   const normalized = String(value || "").toLowerCase();
   return <span className={`ticket-badge ${type} ${normalized}`}>{value}</span>;
 }
 
 export default function AdminDashboard() {
+  useEffect(() => {
+    ticketsMountedRef.current = true;
+    return () => {
+      ticketsMountedRef.current = false;
+    };
+  }, []);
+
   const { brand, setBrand, resetBrand, defaultBrand } = useBrand();
-  const { user, logout } = useAuth();
+  const { user, logout, role } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   const pathParts = location.pathname.split("/").filter(Boolean);
   const pageKey = pathParts[1] || "dashboard";
+  const activeTicketIdFromRoute = pageKey === "tickets" ? (pathParts[2] ? decodeURIComponent(pathParts[2]) : null) : null;
+
+  // RBAC guard (backend is source of truth; UI must not spam retries for ROLE_USER).
+  useEffect(() => {
+    const normalized = String(role || window.localStorage.getItem("ui-role") || "").toUpperCase();
+    if (normalized && normalized !== "ROLE_ADMIN") {
+      showError("Unauthorized: admin access required");
+      navigate("/dashboard", { replace: true, state: { message: "Unauthorized: admin access required" } });
+    }
+  }, [role, navigate]);
 
   // ── Data layer ──────────────────────────────────────────────────────────────
-  const {
-    adminStats,
-    payments,
-    tickets,
-    ticketsLoading,
-    activityFeed,
-    userGrowth,
-    users,
-    uploadedApps,
-    kycRequests,
-    notificationItems,
-    userCountStats,
-    kycStats,
-    ticketStats,
-    updateUserStatus,
-    fetchExportUsers,
-    updateKycStatus,
-    updateTicketStatus,
-    sendTicketReply,
-    createApp,
-    updateApp,
-    deleteApp,
-    markNotificationRead,
-    markAllNotificationsRead,
-  } = useAdminDashboard();
+  // NOTE: Admin dashboard must use real backend endpoints only. Legacy `useAdminDashboard`
+  // (mock/synthetic sources) is intentionally not used here.
+  const adminStats = [];
+  const payments = [];
+  // Legacy variable referenced by DEV logs; keep empty to avoid synthetic data.
+  const tickets = [];
+  const ticketsLoading = false;
+  const updateUserStatus = async () => {};
+  const sendTicketReply = async () => {};
+  const userGrowth = [];
+
+  // ── Admin dashboard API integration (safe + non-breaking) ────────────────────
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [summary, setSummary] = useState(null);
+  const [apiUserGrowth, setApiUserGrowth] = useState([]);
+  const [apiActivity, setApiActivity] = useState([]);
+  const [apiRecentUsers, setApiRecentUsers] = useState([]);
+  const [apiTicketsForAdminPages, setApiTicketsForAdminPages] = useState([]);
+  /** Snapshot of list rows for merge (updated every render). */
+  const apiTicketsForAdminPagesRef = useRef([]);
+  const [apiTicketsForAdminPagesLoading, setApiTicketsForAdminPagesLoading] = useState(false);
+  const ticketsFetchRef = useRef({ active: false, seq: 0 });
+  const ticketsMountedRef = useRef(true);
+  const ticketsHasLoadedRef = useRef(false);
+  /** Dashboard / analytics home: visibility-aware poll (does not refetch user growth). */
+  const dashboardPollMountedRef = useRef(true);
+  const dashboardPollInFlightRef = useRef(false);
+  const dashboardPollGenRef = useRef(0);
+  const [apiKycRequests, setApiKycRequests] = useState([]);
+  const [apiKycLoading, setApiKycLoading] = useState(false);
+  const [kycLoadError, setKycLoadError] = useState(null);
+  const [apiNotificationItems, setApiNotificationItems] = useState([]);
+  const [apiAdminUsers, setApiAdminUsers] = useState([]);
+  const [apiAdminUsersLoading, setApiAdminUsersLoading] = useState(false);
+  const [apiAdminUsersLoadError, setApiAdminUsersLoadError] = useState(null);
+  const [adminUsersReloadSeq, setAdminUsersReloadSeq] = useState(0);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const [resolvingTicketIds, setResolvingTicketIds] = useState(() => new Set());
+  const DEV_BUILD_MARKER = "";
+  const adminAuthToastShownRef = useRef(false);
+  const kycListReloadGenRef = useRef(0);
+  const kycListReloadInFlightRef = useRef(false);
+  const kycDrawerFetchGenRef = useRef(0);
+  // ── UI state (must be declared before effects that use it) ──────────────────
+  const [ticketStatusFilter, setTicketStatusFilter] = useState("All");
+  const showApiErrorToast = (fallbackMessage, err) => {
+    // apiFetch handles 401 (session expiry) with a redirect/logout; avoid noisy toasts during that flow.
+    if (err?.status === 401) return;
+    if (isServerUnavailableError(err)) {
+      showError("Server unavailable");
+      return;
+    }
+    showError(fallbackMessage);
+  };
+
+  const reloadKycList = useCallback(async () => {
+    if (kycListReloadInFlightRef.current) return;
+    kycListReloadInFlightRef.current = true;
+    const gen = ++kycListReloadGenRef.current;
+    setApiKycLoading(true);
+    setKycLoadError(null);
+    try {
+      let list = [];
+      try {
+        const all = await adminDashboardApi.getKycAll();
+        if (Array.isArray(all) && all.length) list = all;
+      } catch {
+        // GET /admin/kyc/all may be absent in some deployments; fall back to pending queue.
+      }
+      if (!list.length) {
+        const pending = await adminDashboardApi.getKycPending().catch(() => []);
+        list = Array.isArray(pending) ? pending : [];
+      }
+      if (gen === kycListReloadGenRef.current) {
+        setApiKycRequests(list);
+        setLastUpdatedAt(Date.now());
+      }
+    } catch (err) {
+      if (gen === kycListReloadGenRef.current) {
+        setApiKycRequests([]);
+        setKycLoadError(err?.message || "Could not load KYC queue");
+        showApiErrorToast("Could not load KYC queue", err);
+      }
+    } finally {
+      kycListReloadInFlightRef.current = false;
+      if (gen === kycListReloadGenRef.current) {
+        setApiKycLoading(false);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const [summaryRes, growthRes, activityRes, recentUsersRes, openTicketsRes] =
+          await withRetry(
+            async () =>
+              await Promise.all([
+                adminDashboardApi.getSummary(),
+                adminDashboardApi.getUserGrowth(),
+                adminDashboardApi.getActivity(),
+                adminDashboardApi.getRecentUsers(),
+                adminDashboardApi.getOpenTickets(),
+              ]),
+            { maxAttempts: DASHBOARD_FETCH_MAX_ATTEMPTS, label: "dashboard fetch" },
+          );
+
+        if (!mounted) return;
+        setSummary(summaryRes ?? null);
+        setApiUserGrowth(Array.isArray(growthRes) ? growthRes : []);
+        setApiActivity(Array.isArray(activityRes) ? activityRes : []);
+        setApiRecentUsers(Array.isArray(recentUsersRes) ? recentUsersRes : []);
+        // SINGLE source of truth:
+        // Merge Open tickets into `apiTicketsForAdminPages` so both widget + table derive from one array.
+        setApiTicketsForAdminPages((prev) => {
+          const incoming = Array.isArray(openTicketsRes) ? openTicketsRes : [];
+          if (!incoming.length) return Array.isArray(prev) ? prev : [];
+          const map = new Map(
+            (Array.isArray(prev) ? prev : []).map((t) => [adminTicketMergeKey(t), t]),
+          );
+          incoming.forEach((t) => {
+            map.set(adminTicketMergeKey(t), t);
+          });
+          return Array.from(map.values());
+        });
+        setLastUpdatedAt(Date.now());
+      } catch (err) {
+        if (!mounted) return;
+        const status = err?.status;
+        if ((status === 401 || status === 403) && !adminAuthToastShownRef.current) {
+          adminAuthToastShownRef.current = true;
+          showError("Admin access not enabled for this account");
+        } else {
+          showApiErrorToast("Failed to load dashboard data", err);
+        }
+        setError(err?.message || "Failed to load dashboard data");
+        // Preserve layout: keep safe empty values (don't early-return error UI).
+        setSummary(null);
+        setApiUserGrowth([]);
+        setApiActivity([]);
+        setApiRecentUsers([]);
+        // Do NOT clear tickets here; avoid overwriting a previously successful tickets state.
+      } finally {
+        if (!mounted) return;
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  // ── Dashboard / analytics: lightweight background refresh (no growth refetch) ─
+  useEffect(() => {
+    if (pageKey !== "dashboard" && pageKey !== "analytics") return undefined;
+    dashboardPollMountedRef.current = true;
+    let intervalId = null;
+    const clear = () => {
+      if (intervalId != null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+    const refresh = async () => {
+      if (!dashboardPollMountedRef.current || document.visibilityState !== "visible") return;
+      if (dashboardPollInFlightRef.current) return;
+      const genSnapshot = dashboardPollGenRef.current;
+      dashboardPollInFlightRef.current = true;
+      try {
+        const [summaryRes, activityRes, recentUsersRes, openTicketsRes] = await Promise.all([
+          adminDashboardApi.getSummary(),
+          adminDashboardApi.getActivity(),
+          adminDashboardApi.getRecentUsers(),
+          adminDashboardApi.getOpenTickets(),
+        ]);
+        if (!dashboardPollMountedRef.current || genSnapshot !== dashboardPollGenRef.current) return;
+        setSummary(summaryRes ?? null);
+        setApiActivity(Array.isArray(activityRes) ? activityRes : []);
+        setApiRecentUsers(Array.isArray(recentUsersRes) ? recentUsersRes : []);
+        setApiTicketsForAdminPages((prev) => {
+          const incoming = Array.isArray(openTicketsRes) ? openTicketsRes : [];
+          if (!incoming.length) return Array.isArray(prev) ? prev : [];
+          const map = new Map(
+            (Array.isArray(prev) ? prev : []).map((t) => [adminTicketMergeKey(t), t]),
+          );
+          incoming.forEach((t) => {
+            map.set(adminTicketMergeKey(t), t);
+          });
+          return Array.from(map.values());
+        });
+        setLastUpdatedAt(Date.now());
+      } catch {
+        // Silent on poll — initial load already surfaced hard failures; avoid flicker/toast spam.
+      } finally {
+        dashboardPollInFlightRef.current = false;
+      }
+    };
+    const tick = () => {
+      void refresh();
+    };
+    const start = () => {
+      clear();
+      if (document.visibilityState !== "visible") return;
+      intervalId = window.setInterval(tick, DASHBOARD_POLL_MS);
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") clear();
+      else start();
+    };
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      dashboardPollMountedRef.current = false;
+      dashboardPollGenRef.current += 1;
+      clear();
+      document.removeEventListener("visibilitychange", onVis);
+      dashboardPollInFlightRef.current = false;
+    };
+  }, [pageKey]);
+
+  // ── Admin activity → notification dropdown (backend source of truth) ─────────
+  useEffect(() => {
+    setApiNotificationItems((prev) => {
+      const prevRead = new Map((prev || []).map((n) => [String(n.id), Boolean(n.read)]));
+      const source = Array.isArray(apiActivity) ? apiActivity : [];
+      return source.map((entry, index) => {
+        const id = String(entry?.id ?? `${entry?.time ?? ""}-${index}`);
+        return {
+          id,
+          title: toStringSafe(entry?.event ?? entry?.title ?? entry?.action ?? "Activity", "Activity"),
+          meta: toStringSafe(entry?.meta ?? entry?.message ?? "", ""),
+          time: toStringSafe(entry?.time ?? entry?.createdAt ?? "", "—"),
+          read: prevRead.get(id) ?? index > 1,
+        };
+      });
+    });
+  }, [apiActivity]);
+
+  apiTicketsForAdminPagesRef.current = Array.isArray(apiTicketsForAdminPages)
+    ? apiTicketsForAdminPages
+    : [];
+
+  // ── Admin tickets: real backend only ─────────────────────────────────────────
+  // Always merge OPEN + PENDING + RESOLVED from the API; inbox tabs filter client-side only.
+  // Avoids tickets “vanishing” when the backend moves OPEN → PENDING while an admin still has the Open tab selected.
+  const refreshAdminTickets = useCallback(async ({ reason: refreshReason = "" } = {}) => {
+    if (ticketsFetchRef.current.active) return;
+    const reqSeq = (ticketsFetchRef.current.seq += 1);
+    ticketsFetchRef.current.active = true;
+    // Only show skeleton on first tickets load; background refresh keeps rows.
+    if (!ticketsHasLoadedRef.current) setApiTicketsForAdminPagesLoading(true);
+    try {
+      const statuses = ["OPEN", "PENDING", "RESOLVED"];
+      const settled = await Promise.allSettled(
+        statuses.map((s) => adminDashboardApi.getTicketsByStatus(s)),
+      );
+      if (!ticketsMountedRef.current || reqSeq !== ticketsFetchRef.current.seq) return;
+
+      const incoming = [];
+      /** @type {{ status: string, message: string }[]} */
+      const failures = [];
+      settled.forEach((r, i) => {
+        if (r.status === "fulfilled") {
+          const arr = Array.isArray(r.value) ? r.value : [];
+          incoming.push(...arr);
+        } else {
+          failures.push({
+            status: statuses[i],
+            message: r.reason?.message || String(r.reason || "error"),
+          });
+        }
+      });
+
+      const prevSnap = apiTicketsForAdminPagesRef.current;
+      const merged = mergeAdminTicketPages(prevSnap, incoming);
+
+      setApiTicketsForAdminPages(merged);
+
+      ticketsHasLoadedRef.current = true;
+      setLastUpdatedAt(Date.now());
+    } catch {
+      // Intentionally quiet: list refresh is best-effort; per-status failures are surfaced via `failures` above.
+    } finally {
+      setApiTicketsForAdminPagesLoading(false);
+      ticketsFetchRef.current.active = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (pageKey !== "tickets") return;
+    let alive = true;
+    void (async () => {
+      if (!alive) return;
+      await refreshAdminTickets({ reason: "tickets page mount" });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pageKey, refreshAdminTickets]);
+
+  // Background list refresh while the tickets workspace is open (same visibility rules as conversation poll).
+  useEffect(() => {
+    if (pageKey !== "tickets") return undefined;
+    let intervalId = null;
+    const clear = () => {
+      if (intervalId != null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+    const tick = () => {
+      if (document.visibilityState === "visible") {
+        void refreshAdminTickets({ reason: "list poll" });
+      }
+    };
+    const start = () => {
+      clear();
+      if (document.visibilityState !== "visible") return;
+      intervalId = window.setInterval(tick, 15_000);
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") clear();
+      else start();
+    };
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clear();
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pageKey, refreshAdminTickets]);
+
+  // Admin Users list: GET /admin/users (real API only; no mock rows).
+  useEffect(() => {
+    if (pageKey !== "users") return;
+    let alive = true;
+    (async () => {
+      setApiAdminUsersLoading(true);
+      setApiAdminUsersLoadError(null);
+      try {
+        const list = await adminDashboardApi.listUsers();
+        if (!alive) return;
+        setApiAdminUsers(Array.isArray(list) ? list : []);
+      } catch (err) {
+        if (!alive) return;
+        setApiAdminUsers([]);
+        setApiAdminUsersLoadError(err?.message || "Could not load users");
+        showApiErrorToast("Could not load users", err);
+      } finally {
+        if (alive) setApiAdminUsersLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [pageKey, adminUsersReloadSeq]);
+
+  // ── Admin KYC: real backend only (all + pending fallback) ───────────────────
+  useEffect(() => {
+    if (pageKey !== "kyc") return;
+    void reloadKycList();
+  }, [pageKey, reloadKycList]);
+
+  useEffect(() => {
+    if (pageKey !== "kyc") return;
+    let intervalId = null;
+    const clear = () => {
+      if (intervalId != null) window.clearInterval(intervalId);
+      intervalId = null;
+    };
+    const tick = () => {
+      if (document.visibilityState === "visible") void reloadKycList();
+    };
+    const start = () => {
+      clear();
+      if (document.visibilityState !== "visible") return;
+      intervalId = window.setInterval(tick, KYC_ADMIN_POLL_MS);
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") clear();
+      else start();
+    };
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clear();
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pageKey, reloadKycList]);
 
   // ── UI state ────────────────────────────────────────────────────────────────
   const [brandingForm, setBrandingForm] = useState(brand);
@@ -190,27 +1057,153 @@ export default function AdminDashboard() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [ticketSearchText, setTicketSearchText] = useState("");
-  const [ticketStatusFilter, setTicketStatusFilter] = useState("All");
   const [ticketPriorityFilter, setTicketPriorityFilter] = useState("All");
   const [selectedTicketId, setSelectedTicketId] = useState(null);
-  const [ticketReplyText, setTicketReplyText] = useState("");
-  const [appSearchText, setAppSearchText] = useState("");
-  const [appForm, setAppForm] = useState({
-    name: "",
-    description: "",
-    logoUrl: "",
-  });
-  const [editingAppId, setEditingAppId] = useState(null);
+  const [activeTicket, setActiveTicket] = useState(null);
+  const [activeMessages, setActiveMessages] = useState([]);
+  const activeTicketFetchRef = useRef({ seq: 0 });
+  const activeTicketReplyRef = useRef({ active: false, seq: 0 });
   const [userSearchText, setUserSearchText] = useState("");
   const [userStatusFilter, setUserStatusFilter] = useState("All");
-  const [userRoleFilter, setUserRoleFilter] = useState("All");
-  const [userViewFilter, setUserViewFilter] = useState("All");
   const [usersPage, setUsersPage] = useState(1);
+
+  useEffect(() => {
+    const allowed = [
+      "All",
+      "ACTIVE",
+      "INACTIVE",
+      "PENDING",
+      "BLOCKED",
+      "SUSPENDED",
+      "UNKNOWN",
+    ];
+    if (!allowed.includes(userStatusFilter)) setUserStatusFilter("All");
+  }, [userStatusFilter]);
   const [kycSearchText, setKycSearchText] = useState("");
   const [kycStatusFilter, setKycStatusFilter] = useState("All");
+  const [kycPage, setKycPage] = useState(1);
+  const [kycDrawerRow, setKycDrawerRow] = useState(null);
+  const [kycRejectFor, setKycRejectFor] = useState(null);
+  const [kycRejectReasonDraft, setKycRejectReasonDraft] = useState("");
+  const [kycReuploadFor, setKycReuploadFor] = useState(null);
+  const [kycReuploadNoteDraft, setKycReuploadNoteDraft] = useState("");
+  const [kycActionBusyId, setKycActionBusyId] = useState(null);
 
   const menuRef = useRef(null);
   const searchQuery = searchText.trim().toLowerCase();
+
+  const summaryTotals = useMemo(
+    () => ({
+      totalUsers: toFiniteNumber(summary?.totalUsers, 0),
+      activeUsers: toFiniteNumber(summary?.activeUsers, 0),
+      totalApps: toFiniteNumber(summary?.totalApps, 0),
+      openTickets: toFiniteNumber(summary?.openTickets, 0),
+    }),
+    [summary],
+  );
+
+  const dashboardAdminStats = useMemo(() => {
+    const base =
+      Array.isArray(adminStats) && adminStats.length ? adminStats : ADMIN_STATS_TEMPLATE;
+
+    const toDisplay = (value) =>
+      typeof value === "number" ? value.toLocaleString() : String(value ?? "0");
+
+    return base.map((card) => {
+      if (card?.label === "Total Users") {
+        return { ...card, value: toDisplay(summaryTotals.totalUsers) };
+      }
+      if (card?.label === "Active Users") {
+        return { ...card, value: toDisplay(summaryTotals.activeUsers) };
+      }
+      if (card?.label === "Total Apps") {
+        return { ...card, value: toDisplay(summaryTotals.totalApps) };
+      }
+      if (card?.label === "Open Tickets") {
+        return { ...card, value: toDisplay(summaryTotals.openTickets) };
+      }
+      if (card?.label === "Revenue") {
+        return { ...card, value: "—" };
+      }
+      return card;
+    });
+  }, [adminStats, summaryTotals]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    // eslint-disable-next-line no-console
+    console.groupCollapsed("[DASHBOARD_SUMMARY_AUDIT] UI pipeline");
+    // eslint-disable-next-line no-console
+    console.log("A) `summary` state (object from getSummary)", summary);
+    // eslint-disable-next-line no-console
+    console.log("B) `summaryTotals` (toFiniteNumber applied in AdminDashboard)", summaryTotals);
+    // eslint-disable-next-line no-console
+    console.log(
+      "C) `dashboardAdminStats` card values (template + KPI overrides)",
+      (dashboardAdminStats || []).map((c) => ({ label: c.label, value: c.value })),
+    );
+    // eslint-disable-next-line no-console
+    console.groupEnd();
+  }, [summary, summaryTotals, dashboardAdminStats]);
+
+  const chartData = useMemo(() => {
+    // API contract: [{ date, count }]. Keep support for numeric arrays too.
+    if (Array.isArray(apiUserGrowth) && apiUserGrowth.length) {
+      const normalized = apiUserGrowth
+        .map((item, index) => normalizeGrowthPoint(item, index))
+        .filter(Boolean);
+      if (normalized.length) return normalized;
+    }
+    return [];
+  }, [apiUserGrowth]);
+
+  const dashboardUserGrowth = useMemo(() => chartData.map((item) => item.users), [chartData]);
+
+  const dashboardActivityFeed = useMemo(() => {
+    const source = Array.isArray(apiActivity) ? apiActivity : [];
+    const items = source.map(normalizeActivityEntry).filter(Boolean);
+    items.sort((a, b) => {
+      const ta = toDateMs(a?.time);
+      const tb = toDateMs(b?.time);
+      const va = Number.isFinite(ta) ? ta : -Infinity;
+      const vb = Number.isFinite(tb) ? tb : -Infinity;
+      return vb - va;
+    });
+    return items;
+  }, [apiActivity]);
+
+  const dashboardRecentUsers = useMemo(() => {
+    const items = Array.isArray(apiRecentUsers) ? apiRecentUsers : [];
+    return items.slice(0, 5).map(normalizeAdminUserRow);
+  }, [apiRecentUsers]);
+
+  const dashboardOpenTickets = useMemo(() => {
+    // Active Tickets card must be production-strict:
+    // - Always show real admin API tickets (or empty state).
+    const source = Array.isArray(apiTicketsForAdminPages) ? apiTicketsForAdminPages : [];
+    const openOnly = source.filter((t) => rawTicketCanonicalStatus(t) === "OPEN");
+    return openOnly.map(normalizeTicket);
+  }, [apiTicketsForAdminPages]);
+
+  const ticketsForAdminPages = useMemo(() => {
+    return Array.isArray(apiTicketsForAdminPages) ? apiTicketsForAdminPages : [];
+  }, [apiTicketsForAdminPages]);
+
+  const normalizedTickets = useMemo(
+    () => ticketsForAdminPages.map(normalizeTicket),
+    [ticketsForAdminPages],
+  );
+
+  const computedTicketStats = useMemo(() => {
+    // Keep UI unchanged but ensure counts reflect real data in production.
+    const list = Array.isArray(normalizedTickets) ? normalizedTickets : [];
+    return {
+      total: list.length,
+      open: list.filter((t) => normalizeTicketStatus(t.status) === "OPEN").length,
+      pending: list.filter((t) => normalizeTicketStatus(t.status) === "PENDING").length,
+      resolved: list.filter((t) => normalizeTicketStatus(t.status) === "RESOLVED").length,
+    };
+  }, [normalizedTickets]);
 
   useEffect(() => {
     setBrandingForm(brand);
@@ -228,37 +1221,46 @@ export default function AdminDashboard() {
     return () => document.removeEventListener("mousedown", handleOutsideClick);
   }, []);
 
-  const unreadCount = notificationItems.filter((item) => !item.read).length;
+  const unreadCount = apiNotificationItems.filter((item) => !item.read).length;
 
   // ── Filtered views (UI state + data) ───────────────────────────────────────────
   const filteredUsers = useMemo(() => {
-    if (!searchQuery) return users;
-    return users.filter((item) =>
-      `${item.name} ${item.email} ${item.role} ${item.joinedOn} ${item.status} ${
-        item.isActive ? "active" : "inactive"
-      }`
+    const source = dashboardRecentUsers;
+    if (!searchQuery) return source;
+    return source.filter((item) =>
+      `${toStringSafe(item.name)} ${toStringSafe(item.email)} ${toStringSafe(item.phone)} ${toStringSafe(item.joinedOnDisplay)} ${toStringSafe(item.statusMeta?.label ?? item.status)} ${item.kycPill?.label ?? ""}`
         .toLowerCase()
         .includes(searchQuery),
     );
-  }, [searchQuery, users]);
+  }, [searchQuery, dashboardRecentUsers]);
+
+  const normalizedAdminUsersList = useMemo(
+    () => (Array.isArray(apiAdminUsers) ? apiAdminUsers : []).map(normalizeAdminUserRow),
+    [apiAdminUsers],
+  );
 
   const userManagementRows = useMemo(() => {
     const query = userSearchText.trim().toLowerCase();
-    return users.filter((user) => {
+    return normalizedAdminUsersList.filter((user) => {
       const matchesSearch =
         !query ||
-        `${user.id} ${user.name} ${user.email} ${user.role} ${user.status}`
+        `${user.id} ${user.name} ${user.email} ${user.phone} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
           .toLowerCase()
           .includes(query);
       const matchesStatus =
-        userStatusFilter === "All" || user.status === userStatusFilter;
-      const matchesRole =
-        userRoleFilter === "All" || user.role === userRoleFilter;
-      const matchesView =
-        userViewFilter === "All" || user.status === userViewFilter;
-      return matchesSearch && matchesStatus && matchesRole && matchesView;
+        userStatusFilter === "All" || user.statusMeta?.key === userStatusFilter;
+      return matchesSearch && matchesStatus;
     });
-  }, [users, userSearchText, userStatusFilter, userRoleFilter, userViewFilter]);
+  }, [normalizedAdminUsersList, userSearchText, userStatusFilter]);
+
+  const adminUsersDatasetEmpty =
+    !apiAdminUsersLoading &&
+    !apiAdminUsersLoadError &&
+    normalizedAdminUsersList.length === 0;
+  const adminUsersSearchOrFilterEmpty =
+    !apiAdminUsersLoading &&
+    normalizedAdminUsersList.length > 0 &&
+    userManagementRows.length === 0;
 
   const userPageSize = 8;
   const totalUserPages = Math.max(
@@ -271,40 +1273,198 @@ export default function AdminDashboard() {
     return userManagementRows.slice(start, start + userPageSize);
   }, [userManagementRows, usersPage]);
 
+  const kycNormalizedRows = useMemo(
+    () =>
+      (Array.isArray(apiKycRequests) ? apiKycRequests : []).map((raw, i) =>
+        normalizeAdminKycRow(raw, i),
+      ),
+    [apiKycRequests],
+  );
+
+  const kycStats = useMemo(
+    () => kycStatsFromNormalizedRows(kycNormalizedRows),
+    [kycNormalizedRows],
+  );
+
   const filteredKycRows = useMemo(() => {
     const query = kycSearchText.trim().toLowerCase();
-
-    return kycRequests.filter((request) => {
-      const matchesQuery =
-        !query ||
-        `${request.id} ${request.userName} ${request.userEmail} ${request.documentType}`
-          .toLowerCase()
-          .includes(query);
-      const matchesStatus =
-        kycStatusFilter === "All" || request.status === kycStatusFilter;
+    return kycNormalizedRows.filter((row) => {
+      const hay = `${row.id} ${row.fullName} ${row.email} ${row.phone} ${row.documentType} ${row.documentNumber} ${row.canonicalStatus} ${row.statusRaw}`
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+      const matchesQuery = !query || hay.includes(query);
+      const matchesStatus = kycStatusFilter === "All" || row.canonicalStatus === kycStatusFilter;
       return matchesQuery && matchesStatus;
     });
-  }, [kycRequests, kycSearchText, kycStatusFilter]);
+  }, [kycNormalizedRows, kycSearchText, kycStatusFilter]);
+
+  const totalKycPages = Math.max(1, Math.ceil(filteredKycRows.length / KYC_ADMIN_PAGE_SIZE));
+
+  const paginatedKycRows = useMemo(() => {
+    const start = (kycPage - 1) * KYC_ADMIN_PAGE_SIZE;
+    return filteredKycRows.slice(start, start + KYC_ADMIN_PAGE_SIZE);
+  }, [filteredKycRows, kycPage]);
+
+  useEffect(() => {
+    setKycPage(1);
+  }, [kycSearchText, kycStatusFilter]);
+
+  useEffect(() => {
+    if (kycPage > totalKycPages) setKycPage(totalKycPages);
+  }, [kycPage, totalKycPages]);
+
+  const handleKycApprove = useCallback(
+    async (row) => {
+      if (!adminKycRowHasActionableId(row)) return;
+      setKycActionBusyId(row.id);
+      try {
+        await adminDashboardApi.verifyKyc(row.id);
+        await reloadKycList();
+        invalidateDashboardData("admin-kyc-approved");
+        showSuccess("KYC approved");
+      } catch (e) {
+        showApiErrorToast("Failed to approve KYC", e);
+      } finally {
+        setKycActionBusyId(null);
+      }
+    },
+    [reloadKycList],
+  );
+
+  const handleKycRejectConfirm = useCallback(async () => {
+    const row = kycRejectFor;
+    if (!row || !adminKycRowHasActionableId(row)) return;
+    setKycActionBusyId(row.id);
+    try {
+      const reason = kycRejectReasonDraft.trim();
+      await adminDashboardApi.rejectKyc(
+        row.id,
+        reason ? { reason, rejectionReason: reason } : {},
+      );
+      await reloadKycList();
+      invalidateDashboardData("admin-kyc-rejected");
+      showSuccess("KYC rejected");
+      setKycRejectFor(null);
+      setKycRejectReasonDraft("");
+    } catch (e) {
+      showApiErrorToast("Failed to reject KYC", e);
+    } finally {
+      setKycActionBusyId(null);
+    }
+  }, [kycRejectFor, kycRejectReasonDraft, reloadKycList]);
+
+  const handleKycRequestReupload = useCallback(async () => {
+    const row = kycReuploadFor;
+    if (!row || !adminKycRowHasActionableId(row)) return;
+    setKycActionBusyId(row.id);
+    const note = kycReuploadNoteDraft.trim();
+    try {
+      await adminDashboardApi.patchKycApplicationStatus(row.id, {
+        status: "REUPLOAD_REQUIRED",
+        ...(note ? { rejectionReason: note, message: note } : {}),
+      });
+      await reloadKycList();
+      invalidateDashboardData("admin-kyc-reupload");
+      showSuccess("Re-upload requested");
+      setKycReuploadFor(null);
+      setKycReuploadNoteDraft("");
+    } catch (e) {
+      const st = e?.status;
+      if (st === 404 || st === 405) {
+        showApiErrorToast(
+          "Re-upload failed: PATCH /admin/kyc/:id/status is missing or not allowed on this server (404/405).",
+          e,
+        );
+      } else {
+        showApiErrorToast("Failed to request re-upload", e);
+      }
+    } finally {
+      setKycActionBusyId(null);
+    }
+  }, [kycReuploadFor, kycReuploadNoteDraft, reloadKycList]);
+
+  const handleKycMarkUnderReview = useCallback(
+    async (row) => {
+      if (!adminKycRowHasActionableId(row)) return;
+      setKycActionBusyId(row.id);
+      try {
+        await adminDashboardApi.patchKycApplicationStatus(row.id, { status: "UNDER_REVIEW" });
+        await reloadKycList();
+        invalidateDashboardData("admin-kyc-under-review");
+        showSuccess("Marked under review");
+      } catch (e) {
+        const st = e?.status;
+        if (st === 404 || st === 405) {
+          showApiErrorToast(
+            "Status update failed: PATCH /admin/kyc/:id/status is missing or not allowed on this server (404/405).",
+            e,
+          );
+        } else {
+          showApiErrorToast("Failed to update status", e);
+        }
+      } finally {
+        setKycActionBusyId(null);
+      }
+    },
+    [reloadKycList],
+  );
+
+  const closeKycDrawer = useCallback(() => {
+    kycDrawerFetchGenRef.current += 1;
+    setKycDrawerRow(null);
+  }, []);
+
+  const openKycDrawer = useCallback((row) => {
+    setKycDrawerRow(row);
+    if (!adminKycRowHasActionableId(row)) return;
+    const gen = ++kycDrawerFetchGenRef.current;
+    void (async () => {
+      try {
+        const detail = await adminDashboardApi.getKycDetail(row.id);
+        if (gen !== kycDrawerFetchGenRef.current) return;
+        setKycDrawerRow((prev) => {
+          if (!prev || String(prev.id) !== String(row.id)) return prev;
+          return mergeAdminKycDetailRow(prev, detail);
+        });
+      } catch {
+        // GET /admin/kyc/:id optional; queue row still usable.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    setKycDrawerRow((prev) => {
+      if (!prev) return prev;
+      const next = kycNormalizedRows.find((r) => r.id === prev.id);
+      if (!next) return null;
+      const patch = kycNormalizedRowToDetailPatch(prev);
+      return Object.keys(patch).length ? mergeAdminKycDetailRow(next, patch) : next;
+    });
+  }, [kycNormalizedRows]);
+
+  useEffect(() => {
+    const anyOpen = Boolean(kycDrawerRow || kycRejectFor || kycReuploadFor);
+    if (!anyOpen || pageKey !== "kyc") return undefined;
+    const onKey = (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      closeKycDrawer();
+      setKycRejectFor(null);
+      setKycReuploadFor(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [kycDrawerRow, kycRejectFor, kycReuploadFor, pageKey, closeKycDrawer]);
 
   useEffect(() => {
     setUsersPage(1);
-  }, [userSearchText, userStatusFilter, userRoleFilter, userViewFilter]);
+  }, [userSearchText, userStatusFilter]);
 
   useEffect(() => {
     if (usersPage > totalUserPages) {
       setUsersPage(totalUserPages);
     }
   }, [usersPage, totalUserPages]);
-
-  const filteredApps = useMemo(() => {
-    const query = appSearchText.trim().toLowerCase() || searchQuery;
-    if (!query) return uploadedApps;
-    return uploadedApps.filter((item) =>
-      `${item.name} ${item.description} ${item.status}`
-        .toLowerCase()
-        .includes(query),
-    );
-  }, [searchQuery, appSearchText, uploadedApps]);
 
   const filteredPayments = useMemo(() => {
     if (!searchQuery) return payments;
@@ -316,75 +1476,134 @@ export default function AdminDashboard() {
   }, [searchQuery, payments]);
 
   const dashboardFilteredTickets = useMemo(() => {
-    if (!searchQuery) return tickets;
-    return tickets.filter((item) =>
+    const source = dashboardOpenTickets;
+    if (!searchQuery) return source;
+    return source.filter((item) =>
       `${item.subject} ${item.id} ${item.status} ${item.priority}`
         .toLowerCase()
         .includes(searchQuery),
     );
-  }, [searchQuery, tickets]);
+  }, [searchQuery, dashboardOpenTickets]);
+
+  const dashboardTicketsSorted = useMemo(() => {
+    const items = Array.isArray(dashboardFilteredTickets) ? [...dashboardFilteredTickets] : [];
+    items.sort((a, b) => {
+      const ta = toDateMs(a?.updatedAt ?? a?.lastUpdatedAt ?? a?.createdAt ?? a?.date ?? a?.time);
+      const tb = toDateMs(b?.updatedAt ?? b?.lastUpdatedAt ?? b?.createdAt ?? b?.date ?? b?.time);
+      const va = Number.isFinite(ta) ? ta : -Infinity;
+      const vb = Number.isFinite(tb) ? tb : -Infinity;
+      return vb - va;
+    });
+    return items;
+  }, [dashboardFilteredTickets]);
+
+  const dashboardTicketsToRender = useMemo(() => {
+    return searchQuery
+      ? dashboardTicketsSorted
+      : dashboardTicketsSorted.slice(0, DASHBOARD_PANEL_MAX_ITEMS);
+  }, [dashboardTicketsSorted, searchQuery]);
 
   const filteredTicketRows = useMemo(() => {
     const query = ticketSearchText.trim().toLowerCase();
-    return tickets.filter((ticket) => {
+    const prFilter = String(ticketPriorityFilter || "All").trim();
+    const prIsAll = prFilter === "" || prFilter.toLowerCase() === "all";
+    const rows = normalizedTickets.filter((ticket) => {
       const matchesQuery =
         !query ||
-        `${ticket.userName} ${ticket.subject}`.toLowerCase().includes(query);
+        `${toStringSafe(ticket.userName)} ${toStringSafe(ticket.userEmail)} ${toStringSafe(ticket.subject)}`
+          .toLowerCase()
+          .includes(query);
       const matchesStatus =
-        ticketStatusFilter === "All" || ticket.status === ticketStatusFilter;
+        ticketStatusFilter === "All" ||
+        normalizeTicketStatus(ticket.status) === normalizeTicketStatus(ticketStatusFilter);
+      const tPri = normalizeAdminPriorityLabel(ticket.priority);
       const matchesPriority =
-        ticketPriorityFilter === "All" ||
-        ticket.priority === ticketPriorityFilter;
+        prIsAll ||
+        tPri.toLowerCase() === prFilter.toLowerCase() ||
+        normalizeAdminPriorityLabel(prFilter) === tPri;
       return matchesQuery && matchesStatus && matchesPriority;
     });
-  }, [tickets, ticketSearchText, ticketStatusFilter, ticketPriorityFilter]);
+    const sorted = [...rows].sort((a, b) => {
+      const ta = toDateMs(a?.updatedAt ?? a?.lastUpdatedAt ?? a?.createdAt ?? a?.date ?? a?.time);
+      const tb = toDateMs(b?.updatedAt ?? b?.lastUpdatedAt ?? b?.createdAt ?? b?.date ?? b?.time);
+      const va = Number.isFinite(ta) ? ta : -Infinity;
+      const vb = Number.isFinite(tb) ? tb : -Infinity;
+      return vb - va;
+    });
+    return sorted;
+  }, [normalizedTickets, ticketSearchText, ticketStatusFilter, ticketPriorityFilter]);
 
   const selectedTicket = useMemo(
-    () => tickets.find((ticket) => ticket.id === selectedTicketId) || null,
-    [tickets, selectedTicketId],
+    () =>
+      normalizedTickets.find((ticket) => String(ticket.id) === String(selectedTicketId || "")) || null,
+    [normalizedTickets, selectedTicketId],
   );
 
   const filteredActivity = useMemo(() => {
-    if (!searchQuery) return activityFeed;
-    return activityFeed.filter((item) =>
+    const source = dashboardActivityFeed;
+    if (!searchQuery) return source;
+    return source.filter((item) =>
       `${item.event} ${item.meta} ${item.time}`
         .toLowerCase()
         .includes(searchQuery),
     );
-  }, [searchQuery, activityFeed]);
+  }, [searchQuery, dashboardActivityFeed]);
 
-  const handleMarkAllNotificationsRead = () => markAllNotificationsRead();
+  const dashboardActivityToRender = useMemo(() => {
+    if (!Array.isArray(filteredActivity)) return [];
+    return searchQuery
+      ? filteredActivity
+      : filteredActivity.slice(0, DASHBOARD_PANEL_MAX_ITEMS);
+  }, [filteredActivity, searchQuery]);
+
+  const handleMarkAllNotificationsRead = () =>
+    setApiNotificationItems((prev) => prev.map((n) => ({ ...n, read: true })));
 
   const handleNotificationItemClick = (id) => {
-    markNotificationRead(id);
+    setApiNotificationItems((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, read: true } : n)),
+    );
     setShowNotifications(false);
     navigate("/admin/notifications");
   };
 
-  const handleUserStatusToggle = (userId) => updateUserStatus(userId);
+  const handleUserStatusToggle = (userId) => {
+    if (!ADMIN_USER_STATUS_UPDATE_AVAILABLE) return;
+    void updateUserStatus(userId);
+  };
 
   const handleUserEdit = (userId) => {
-    const found = users.find((item) => item.id === userId);
+    if (!ADMIN_USER_EDIT_AVAILABLE) return;
+    const found = userManagementRows.find((item) => item.id === userId);
     if (!found) return;
     window.alert(`Open edit modal for ${found.name} (ID: ${found.id})`);
   };
 
-  const handleUsersExport = async () => {
-    const rowsFromApi = await fetchExportUsers({
-      status: userStatusFilter,
-      role: userRoleFilter,
-      q: userSearchText,
-    });
-    const rows = rowsFromApi
-      ? rowsFromApi
-      : userManagementRows.length
-        ? userManagementRows
-        : users;
-    const header = ["ID", "Name", "Email", "Role", "Status"];
+  const handleNavigateUserTickets = (user) => {
+    const nav = user?.ticketsNav ?? pickTicketsNavQueryParts(user?._raw ?? user);
+    if (!nav?.enabled || !String(nav.q || "").trim()) return;
+    navigate(`/admin/tickets?q=${encodeURIComponent(String(nav.q).trim())}`);
+  };
+
+  const handleUsersExport = () => {
+    const rows = userManagementRows;
+    if (!rows.length) {
+      showError("No users to export.");
+      return;
+    }
+    const header = ["ID", "Name", "Email", "Phone", "KYC", "Joined", "Status"];
     const csvLines = [
       header.join(","),
       ...rows.map((user) =>
-        [user.id, user.name, user.email, user.role, user.status]
+        [
+          user.id,
+          user.name,
+          user.email,
+          user.phone,
+          user.kycPill?.label ?? "—",
+          user.joinedOnDisplay ?? "—",
+          user.statusMeta?.label ?? user.status ?? "—",
+        ]
           .map((cell) => `"${String(cell).replaceAll('"', '""')}"`)
           .join(","),
       ),
@@ -403,90 +1622,180 @@ export default function AdminDashboard() {
   };
 
   const handleViewTicket = (ticketId) => {
-    setSelectedTicketId(ticketId);
-    setTicketReplyText("");
+    // Preserve filters/search in query params to support back-navigation.
+    const qs = new URLSearchParams(location.search || "");
+    const q = ticketSearchText.trim();
+    if (q) qs.set("q", q);
+    else qs.delete("q");
+    if (ticketStatusFilter && ticketStatusFilter !== "All") qs.set("status", ticketStatusFilter);
+    else qs.delete("status");
+    if (ticketPriorityFilter && ticketPriorityFilter !== "All") qs.set("priority", ticketPriorityFilter);
+    else qs.delete("priority");
+    navigate(`/admin/tickets/${encodeURIComponent(String(ticketId))}${qs.toString() ? `?${qs.toString()}` : ""}`);
   };
 
   const closeTicketPanel = () => {
-    setSelectedTicketId(null);
-    setTicketReplyText("");
+    // Return to the list without losing filters/search.
+    navigate(`/admin/tickets${location.search || ""}`);
   };
 
-  const handleSendTicketReply = async () => {
-    const message = ticketReplyText.trim();
-    if (!selectedTicket || !message) return;
-    await sendTicketReply(selectedTicket, message);
-    setTicketReplyText("");
-  };
-
-  const handleAppFormChange = (key, value) => {
-    setAppForm((prev) => ({
-      ...prev,
-      [key]: value,
-    }));
-  };
-
-  const handleAppLogoUpload = (event) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const logo = typeof reader.result === "string" ? reader.result : "";
-      setAppForm((prev) => ({
-        ...prev,
-        logoUrl: logo,
-      }));
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const resetAppForm = () => {
-    setAppForm({ name: "", description: "", logoUrl: "" });
-    setEditingAppId(null);
-  };
-
-  const handleAppSubmit = async (event) => {
-    event.preventDefault();
-
-    const name = appForm.name.trim();
-    const description = appForm.description.trim();
-
-    if (!name || !description) {
-      window.alert("Please enter app name and description.");
-      return;
+  const loadActiveTicket = async ({ reason: loadReason = "" } = {}) => {
+    if (!activeTicketIdFromRoute) return;
+    const seq = (activeTicketFetchRef.current.seq += 1);
+    try {
+      const raw = await adminDashboardApi.getTicketById(activeTicketIdFromRoute);
+      if (seq !== activeTicketFetchRef.current.seq) return;
+      const { ticket: normTicket, threadSource } = normalizeTicketResponse(raw);
+      const thread = normalizeTicketThread(threadSource);
+      setActiveTicket(normTicket || null);
+      setActiveMessages((prev) =>
+        mergeMessages(prev, thread, {
+          ticketId: activeTicketIdFromRoute,
+          surface: "admin-detail",
+          reason: loadReason,
+        }),
+      );
+    } catch (err) {
+      // Keep previous conversation visible (no flicker); surface toast only.
+      showApiErrorToast("Failed to load ticket conversation", err);
     }
+  };
 
-    if (editingAppId) {
-      await updateApp(editingAppId, {
-        name,
-        description,
-        logoUrl: appForm.logoUrl,
-        status: "Active",
+  const handleSendTicketReply = async (text) => {
+    const msg = String(text || "").trim();
+    if (!activeTicketIdFromRoute || !msg) return;
+    if (activeTicketReplyRef.current.active) return;
+    const seq = (activeTicketReplyRef.current.seq += 1);
+    activeTicketReplyRef.current.active = true;
+    try {
+      await adminDashboardApi.replyToTicket({
+        ticketId: activeTicketIdFromRoute,
+        id: activeTicketIdFromRoute,
+        message: msg,
+        body: msg,
       });
-      resetAppForm();
-      return;
+      showSuccess("Reply sent");
+      await loadActiveTicket({ reason: "reply→resync" });
+      await refreshAdminTickets({ reason: "reply→list resync" });
+    } catch (err) {
+      showApiErrorToast("Could not send reply", err);
+      await loadActiveTicket({ reason: "reply failed→resync" });
+    } finally {
+      if (seq === activeTicketReplyRef.current.seq) {
+        activeTicketReplyRef.current.active = false;
+      }
     }
-
-    await createApp({ name, description, logoUrl: appForm.logoUrl });
-    resetAppForm();
   };
 
-  const handleAppEdit = (app) => {
-    setEditingAppId(app.id);
-    setAppForm({
-      name: app.name,
-      description: app.description,
-      logoUrl: app.logoUrl || "",
-    });
-  };
+  // Keep local filter state in sync with query params on first load.
+  const ticketSearchInitializedRef = useRef(false);
+  // Reset when leaving tickets so the next visit re-hydrates from `location.search`
+  // (e.g. Admin Users → "View Tickets" with a new `?q=`).
+  useEffect(() => {
+    if (pageKey !== "tickets") {
+      ticketSearchInitializedRef.current = false;
+    }
+  }, [pageKey]);
+  // useLayoutEffect: apply URL → filter state before the sync useEffect runs, so we never
+  // `qs.delete("q")` with stale ticketSearchText on the same navigation tick.
+  useLayoutEffect(() => {
+    if (pageKey !== "tickets") return;
+    if (ticketSearchInitializedRef.current) return;
+    ticketSearchInitializedRef.current = true;
+    const qs = new URLSearchParams(location.search || "");
+    const q = String(qs.get("q") || "");
+    const stRaw = String(qs.get("status") || "").trim();
+    const pr = String(qs.get("priority") || "");
+    // Always sync from URL when (re)entering tickets. Missing params must CLEAR stale filters,
+    // otherwise inbox stays filtered while the dashboard widget (no ticketSearchText) still shows rows.
+    if (q) setTicketSearchText(q);
+    else setTicketSearchText("");
+    if (stRaw) {
+      const lower = stRaw.toLowerCase();
+      if (lower === "all") setTicketStatusFilter("All");
+      else setTicketStatusFilter(normalizeTicketStatus(stRaw));
+    } else {
+      setTicketStatusFilter("All");
+    }
+    if (pr) setTicketPriorityFilter(pr);
+    else setTicketPriorityFilter("All");
+  }, [pageKey, location.search]);
 
-  const handleAppDelete = async (appId) => {
-    const confirmed = window.confirm("Delete this app?");
-    if (!confirmed) return;
-    await deleteApp(appId);
-    if (editingAppId === appId) resetAppForm();
-  };
+  // Update URL query params when filters change (replace, no history spam).
+  useEffect(() => {
+    if (pageKey !== "tickets") return;
+    if (!ticketSearchInitializedRef.current) return;
+    const qs = new URLSearchParams(location.search || "");
+    const q = ticketSearchText.trim();
+    const st = String(ticketStatusFilter || "");
+    const pr = String(ticketPriorityFilter || "");
+    if (q) qs.set("q", q);
+    else qs.delete("q");
+    if (st && st !== "All") qs.set("status", st);
+    else qs.delete("status");
+    if (pr && pr !== "All") qs.set("priority", pr);
+    else qs.delete("priority");
+
+    const nextSearch = qs.toString();
+    const current = (location.search || "").replace(/^\?/, "");
+    if (nextSearch !== current) {
+      const base = activeTicketIdFromRoute
+        ? `/admin/tickets/${encodeURIComponent(String(activeTicketIdFromRoute))}`
+        : "/admin/tickets";
+      navigate(`${base}${nextSearch ? `?${nextSearch}` : ""}`, { replace: true });
+    }
+  }, [
+    pageKey,
+    ticketSearchText,
+    ticketStatusFilter,
+    ticketPriorityFilter,
+    navigate,
+    location.search,
+    activeTicketIdFromRoute,
+  ]);
+
+  // Route → selection sync.
+  useEffect(() => {
+    if (pageKey !== "tickets") return;
+    setSelectedTicketId(activeTicketIdFromRoute || null);
+    setActiveTicket(null);
+    setActiveMessages([]);
+    if (activeTicketIdFromRoute) {
+      void loadActiveTicket({ reason: "route selection" });
+    }
+  }, [pageKey, activeTicketIdFromRoute]);
+
+  // Poll active conversation while visible (no websockets).
+  useEffect(() => {
+    if (pageKey !== "tickets" || !activeTicketIdFromRoute) return undefined;
+    let intervalId = null;
+    const clear = () => {
+      if (intervalId != null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+    const tick = () => {
+      if (document.visibilityState === "visible") {
+        void loadActiveTicket({ reason: "poll" });
+      }
+    };
+    const start = () => {
+      clear();
+      if (document.visibilityState !== "visible") return;
+      intervalId = window.setInterval(tick, 10_000);
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") clear();
+      else start();
+    };
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clear();
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pageKey, activeTicketIdFromRoute]);
 
   const handleBrandFieldChange = (key, value) => {
     setBrandingForm((prev) => ({ ...prev, [key]: value }));
@@ -517,10 +1826,140 @@ export default function AdminDashboard() {
 
   const renderPage = () => {
     if (pageKey === "dashboard" || pageKey === "analytics") {
+      if (loading) {
+        return (
+          <div className="page-stack">
+            <section className="stats-grid" aria-label="Loading dashboard summary">
+              {Array.from({ length: 5 }).map((_, idx) => (
+                <article key={idx} className="metric-card">
+                  <p className="metric-label">
+                    <span className="skeleton sk-line sk-w-70" />
+                  </p>
+                  <p className="metric-value">
+                    <span className="skeleton sk-line sk-w-55 sk-h-22" />
+                  </p>
+                  <svg className="mini-chart" viewBox="0 0 100 22" preserveAspectRatio="none">
+                    <rect x="0" y="0" width="100" height="22" className="skeleton sk-rect" />
+                  </svg>
+                </article>
+              ))}
+            </section>
+
+            <section className="content-grid dashboard-grid" aria-label="Loading dashboard panels">
+              <article className="panel growth-panel">
+                <div className="panel-head">
+                  <h3>User Growth</h3>
+                </div>
+                <div className="growth-wrap">
+                  <div className="growth-y-axis">
+                    {Y_AXIS_LABELS.map((label) => (
+                      <span key={label}>{label}</span>
+                    ))}
+                  </div>
+                  <div className="skeleton sk-block sk-h-220" />
+                  <div className="growth-x-axis">
+                    {X_AXIS_LABELS.map((label) => (
+                      <span key={label}>{label}</span>
+                    ))}
+                  </div>
+                </div>
+              </article>
+
+              <article className="panel payments-panel">
+                <div className="panel-head panel-head-inline">
+                  <h3>Recent Payments</h3>
+                </div>
+                <ul className="payment-list">
+                  {Array.from({ length: 3 }).map((_, idx) => (
+                    <li key={idx} aria-hidden="true">
+                      <div className="payment-user">
+                        <span className="payment-avatar skeleton sk-circle" />
+                        <div>
+                          <p>
+                            <span className="skeleton sk-line sk-w-55" />
+                          </p>
+                          <small>
+                            <span className="skeleton sk-line sk-w-40" />
+                          </small>
+                        </div>
+                      </div>
+                      <div className="payment-meta">
+                        <strong>
+                          <span className="skeleton sk-line sk-w-40" />
+                        </strong>
+                        <span className="skeleton sk-pill sk-w-50" />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+
+              <article className="panel activity-panel">
+                <div className="panel-head">
+                  <h3>Activity Feed</h3>
+                </div>
+                <ul className="timeline">
+                  {Array.from({ length: 4 }).map((_, idx) => (
+                    <li key={idx} aria-hidden="true">
+                      <span className="timeline-dot skeleton sk-circle sk-dot" />
+                      <div>
+                        <p>
+                          <span className="skeleton sk-line sk-w-80" />
+                        </p>
+                        <small>
+                          <span className="skeleton sk-line sk-w-55" />
+                        </small>
+                      </div>
+                      <time>
+                        <span className="skeleton sk-line sk-w-45" />
+                      </time>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+
+              <article className="panel signups-panel">
+                <div className="panel-head">
+                  <h3>Recent Signups</h3>
+                </div>
+                <div className="table-wrap">
+                  <div className="tickets-loading-state">Loading signups...</div>
+                </div>
+              </article>
+
+              <article className="panel tickets-panel compact-panel">
+                <div className="panel-head">
+                  <h3>Active Tickets</h3>
+                </div>
+                <ul className="ticket-list simple-ticket-list">
+                  {Array.from({ length: 3 }).map((_, idx) => (
+                    <li key={idx} aria-hidden="true">
+                      <div className="ticket-title-row">
+                        <span className="ticket-dot skeleton sk-circle" />
+                        <p>
+                          <span className="skeleton sk-line sk-w-70" />
+                        </p>
+                      </div>
+                      <div className="ticket-tags">
+                        <span className="skeleton sk-pill sk-w-55" />
+                        <span className="skeleton sk-pill sk-w-55" />
+                        <span className="skeleton sk-pill sk-w-70" />
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </article>
+            </section>
+          </div>
+        );
+      }
+      // Do not early-return on error; preserve layout with safe empty values.
+
       const growthData =
-        Array.isArray(userGrowth) && userGrowth.length >= 2
-          ? userGrowth
+        Array.isArray(dashboardUserGrowth) && dashboardUserGrowth.length >= 2
+          ? dashboardUserGrowth
           : [0, 0];
+      const hasGrowthData = chartData.length >= 2 && growthData.some((v) => toFiniteNumber(v, 0) > 0);
       const maxGrowth = Math.max(...growthData) || 1;
       const divisor = Math.max(growthData.length - 1, 1);
       const points = growthData
@@ -532,8 +1971,15 @@ export default function AdminDashboard() {
         .join(" ");
       return (
         <div className="page-stack">
+          {error ? (
+            <p className="empty-state">{error || "No data available"}</p>
+          ) : null}
+          <div className="dashboard-meta-row">
+            <span className="last-updated">{formatLastUpdated(lastUpdatedAt)}</span>
+          </div>
+
           <section className="stats-grid">
-            {(adminStats || []).map((card) => (
+            {(dashboardAdminStats || []).map((card) => (
               <article key={card.label} className={`metric-card ${card.tone}`}>
                 <p className="metric-label">{card.label}</p>
                 <p className="metric-value">{card.value}</p>
@@ -563,48 +2009,56 @@ export default function AdminDashboard() {
                 </div>
               </div>
               <div className="growth-wrap">
-                <div className="growth-y-axis">
-                  {Y_AXIS_LABELS.map((label) => (
-                    <span key={label}>{label}</span>
-                  ))}
-                </div>
-                <svg
-                  className="growth-chart"
-                  viewBox="0 0 820 240"
-                  preserveAspectRatio="none"
-                >
-                  <defs>
-                    <linearGradient id="growthArea" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="rgba(59,130,246,0.28)" />
-                      <stop offset="100%" stopColor="rgba(59,130,246,0.03)" />
-                    </linearGradient>
-                  </defs>
-                  <line x1="30" y1="220" x2="790" y2="220" className="axis" />
-                  <line x1="30" y1="130" x2="790" y2="130" className="grid" />
-                  <line x1="30" y1="40" x2="790" y2="40" className="grid" />
-                  <path
-                    d={`M ${points} L 790 220 L 30 220 Z`}
-                    className="area"
-                  />
-                  <polyline points={points} className="line" />
-                  {(points ? points.split(" ") : []).map((point) => {
-                    const [cx, cy] = point.split(",");
-                    return (
-                      <circle
-                        key={point}
-                        cx={cx}
-                        cy={cy}
-                        r="3.2"
-                        className="marker"
+                {hasGrowthData ? (
+                  <>
+                    <div className="growth-y-axis">
+                      {Y_AXIS_LABELS.map((label) => (
+                        <span key={label}>{label}</span>
+                      ))}
+                    </div>
+                    <svg
+                      className="growth-chart"
+                      viewBox="0 0 820 240"
+                      preserveAspectRatio="none"
+                    >
+                      <defs>
+                        <linearGradient id="growthArea" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="rgba(59,130,246,0.28)" />
+                          <stop offset="100%" stopColor="rgba(59,130,246,0.03)" />
+                        </linearGradient>
+                      </defs>
+                      <line x1="30" y1="220" x2="790" y2="220" className="axis" />
+                      <line x1="30" y1="130" x2="790" y2="130" className="grid" />
+                      <line x1="30" y1="40" x2="790" y2="40" className="grid" />
+                      <path
+                        d={`M ${points} L 790 220 L 30 220 Z`}
+                        className="area"
                       />
-                    );
-                  })}
-                </svg>
-                <div className="growth-x-axis">
-                  {X_AXIS_LABELS.map((label) => (
-                    <span key={label}>{label}</span>
-                  ))}
-                </div>
+                      <polyline points={points} className="line" />
+                      {(points ? points.split(" ") : []).map((point) => {
+                        const [cx, cy] = point.split(",");
+                        return (
+                          <circle
+                            key={point}
+                            cx={cx}
+                            cy={cy}
+                            r="3.2"
+                            className="marker"
+                          />
+                        );
+                      })}
+                    </svg>
+                    <div className="growth-x-axis">
+                      {X_AXIS_LABELS.map((label) => (
+                        <span key={label}>{label}</span>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="growth-empty">
+                    <p className="empty-state">No growth data available</p>
+                  </div>
+                )}
               </div>
             </article>
 
@@ -652,7 +2106,7 @@ export default function AdminDashboard() {
                 <h3>Activity Feed</h3>
               </div>
               <ul className="timeline">
-                {filteredActivity.map((entry, index) => (
+                {dashboardActivityToRender.map((entry, index) => (
                   <li key={`${entry.time}-${entry.event}`}>
                     <span
                       className={`timeline-dot ${index === 0 ? "highlight" : ""}`}
@@ -666,7 +2120,7 @@ export default function AdminDashboard() {
                 ))}
                 {!filteredActivity.length && (
                   <li className="empty-state">
-                    No activity found for this search.
+                    {searchQuery ? "No activity found for this search." : "No recent activity"}
                   </li>
                 )}
               </ul>
@@ -690,13 +2144,13 @@ export default function AdminDashboard() {
                       <tr key={user.id}>
                         <td>{user.name}</td>
                         <td>{user.email}</td>
-                        <td>{user.joinedOn}</td>
+                        <td>{user.joinedOnDisplay ?? user.joinedOn}</td>
                       </tr>
                     ))}
                     {!filteredUsers.length && (
                       <tr>
                         <td colSpan={3} className="empty-table-row">
-                          No signups found for this search.
+                          {searchQuery ? "No data available" : "No recent signups"}
                         </td>
                       </tr>
                     )}
@@ -710,13 +2164,20 @@ export default function AdminDashboard() {
                 <h3>Active Tickets</h3>
               </div>
               <ul className="ticket-list simple-ticket-list">
-                {dashboardFilteredTickets.map((ticket) => (
+                {dashboardTicketsToRender.map((ticket) => (
                   <li key={ticket.id}>
                     <div className="ticket-title-row">
                       <span
                         className={`ticket-dot ${ticket.priority.toLowerCase()}`}
                       />
-                      <p>{ticket.subject}</p>
+                      <button
+                        type="button"
+                        className="ticket-dashboard-link"
+                        onClick={() => handleViewTicket(ticket.id)}
+                        title="Open conversation"
+                      >
+                        {ticket.subject}
+                      </button>
                     </div>
                     <div className="ticket-tags">
                       <span
@@ -724,17 +2185,48 @@ export default function AdminDashboard() {
                       >
                         {ticket.priority}
                       </span>
-                      <span
-                        className={`status-badge ${ticket.status.toLowerCase()}`}
+                      <TicketBadge type="status" value={ticket.status} />
+                      <button
+                        type="button"
+                        className="menu-icon-btn"
+                        disabled={resolvingTicketIds.has(ticket.id)}
+                        onClick={async () => {
+                          if (resolvingTicketIds.has(ticket.id)) return;
+                          setResolvingTicketIds((prev) => {
+                            const next = new Set(prev);
+                            next.add(ticket.id);
+                            return next;
+                          });
+                          try {
+                            await withRetry(
+                              async () => {
+                                await adminDashboardApi.resolveTicket(ticket.id);
+                                await refreshAdminTickets({ reason: "dashboard widget resolve" });
+                              },
+                              { maxAttempts: ACTION_MAX_ATTEMPTS, label: "resolve ticket" },
+                            );
+                            showSuccess("Ticket resolved successfully");
+                          } catch (e) {
+                            console.warn("[AdminDashboard] resolveTicket failed", e);
+                            setError(e?.message || "Failed to resolve ticket");
+                            showApiErrorToast("Failed to resolve ticket", e);
+                          } finally {
+                            setResolvingTicketIds((prev) => {
+                              const next = new Set(prev);
+                              next.delete(ticket.id);
+                              return next;
+                            });
+                          }
+                        }}
                       >
-                        {ticket.status}
-                      </span>
+                        {resolvingTicketIds.has(ticket.id) ? "Resolving..." : "Resolve"}
+                      </button>
                     </div>
                   </li>
                 ))}
                 {!dashboardFilteredTickets.length && (
                   <li className="empty-state">
-                    No tickets found for this search.
+                    {searchQuery ? "No data available" : "No open tickets"}
                   </li>
                 )}
               </ul>
@@ -759,10 +2251,21 @@ export default function AdminDashboard() {
     }
 
     if (pageKey === "users") {
+      const usersEmptyMessage = (() => {
+        if (apiAdminUsersLoading || paginatedUserRows.length) return null;
+        if (apiAdminUsersLoadError) {
+          return "Users could not be loaded. Use Retry above or check your connection.";
+        }
+        if (adminUsersDatasetEmpty) return "No users returned from the server yet.";
+        if (adminUsersSearchOrFilterEmpty) {
+          return "No users match your search or filters.";
+        }
+        return "No users to show.";
+      })();
       return (
         <section className="content-grid one-column">
           <article className="panel users-management-shell">
-            <div className="users-metrics-grid">
+            <div className="users-metrics-grid users-metrics-grid--compact">
               <article className="users-metric-card">
                 <div className="users-metric-head">
                   <span className="users-metric-icon users-metric-total">
@@ -770,36 +2273,37 @@ export default function AdminDashboard() {
                   </span>
                   <p>Total Users</p>
                 </div>
-                <strong>{userCountStats.total}</strong>
+                <strong>{summaryTotals.totalUsers.toLocaleString()}</strong>
+                <p className="users-metric-source">From dashboard summary</p>
               </article>
               <article className="users-metric-card">
                 <div className="users-metric-head">
                   <span className="users-metric-icon users-metric-active" />
                   <p>Active Users</p>
                 </div>
-                <strong>{userCountStats.active}</strong>
-              </article>
-              <article className="users-metric-card">
-                <div className="users-metric-head">
-                  <span className="users-metric-icon users-metric-inactive" />
-                  <p>Inactive Users</p>
-                </div>
-                <strong>{userCountStats.inactive}</strong>
-              </article>
-              <article className="users-metric-card">
-                <div className="users-metric-head">
-                  <span className="users-metric-icon users-metric-pending" />
-                  <p>Pending Users</p>
-                </div>
-                <strong>{userCountStats.pending}</strong>
+                <strong>{summaryTotals.activeUsers.toLocaleString()}</strong>
+                <p className="users-metric-source">From dashboard summary</p>
               </article>
             </div>
+
+            {apiAdminUsersLoadError ? (
+              <div className="users-load-error-banner" role="alert">
+                <p className="users-load-error-text">{apiAdminUsersLoadError}</p>
+                <button
+                  type="button"
+                  className="users-retry-btn"
+                  onClick={() => setAdminUsersReloadSeq((n) => n + 1)}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
 
             <div className="users-controls-row">
               <input
                 type="text"
                 className="users-control-input users-control-search"
-                placeholder="Search..."
+                placeholder="Search name, email, phone…"
                 value={userSearchText}
                 onChange={(event) => setUserSearchText(event.target.value)}
               />
@@ -811,92 +2315,170 @@ export default function AdminDashboard() {
                   onChange={(event) => setUserStatusFilter(event.target.value)}
                 >
                   <option value="All">Status: All</option>
-                  <option value="Active">Status: Active</option>
-                  <option value="Inactive">Status: Inactive</option>
-                  <option value="Pending">Status: Pending</option>
-                </select>
-                <select
-                  className="users-control-input"
-                  value={userRoleFilter}
-                  onChange={(event) => setUserRoleFilter(event.target.value)}
-                >
-                  <option value="All">Role: All</option>
-                  <option value="Admin">Role: Admin</option>
-                  <option value="Editor">Role: Editor</option>
-                  <option value="User">Role: User</option>
-                </select>
-                <select
-                  className="users-control-input users-control-view"
-                  value={userViewFilter}
-                  onChange={(event) => setUserViewFilter(event.target.value)}
-                  aria-label="View filter"
-                >
-                  <option value="All">All</option>
-                  <option value="Active">Active</option>
-                  <option value="Inactive">Inactive</option>
-                  <option value="Pending">Pending</option>
+                  <option value="ACTIVE">Status: Active</option>
+                  <option value="INACTIVE">Status: Inactive</option>
+                  <option value="PENDING">Status: Pending</option>
+                  <option value="BLOCKED">Status: Blocked</option>
+                  <option value="SUSPENDED">Status: Suspended</option>
+                  <option value="UNKNOWN">Status: Unknown</option>
                 </select>
                 <button
                   type="button"
                   className="users-export-btn"
-                  onClick={handleUsersExport}
+                  onClick={() => handleUsersExport()}
+                  disabled={!userManagementRows.length}
                 >
                   Export
                 </button>
               </div>
             </div>
 
-            <div className="table-wrap users-table-wrap">
-              <table className="users-management-table">
+            <div className="table-wrap users-table-wrap users-table-wrap--saas users-table-wrap--fixed-body">
+              <table className="users-management-table users-management-table--saas">
                 <thead>
                   <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>Email</th>
-                    <th>Role</th>
-                    <th>Status</th>
-                    <th>Actions</th>
+                    <th scope="col">User</th>
+                    <th scope="col">Email</th>
+                    <th scope="col">Phone</th>
+                    <th scope="col">KYC</th>
+                    <th scope="col">Tickets</th>
+                    <th scope="col">Joined</th>
+                    <th scope="col">Status</th>
+                    <th scope="col">Actions</th>
                   </tr>
                 </thead>
-                <tbody>
+                <tbody className="users-table-body">
+                  {apiAdminUsersLoading && !paginatedUserRows.length
+                    ? Array.from({ length: 8 }).map((_, idx) => (
+                        <tr key={`users-sk-${idx}`} className="users-table-skeleton-row" aria-hidden>
+                          <td className="users-col-user">
+                            <div className="users-skeleton-user">
+                              <span className="skeleton users-skeleton-avatar" />
+                              <div className="users-skeleton-text">
+                                <span className="skeleton sk-line sk-w-70 sk-h-22" />
+                                <span className="skeleton sk-line sk-w-45" />
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-block sk-w-80" />
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-w-55" />
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-pill sk-w-45" />
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-w-40" />
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-w-50" />
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-pill sk-w-40" />
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-w-70" />
+                          </td>
+                        </tr>
+                      ))
+                    : null}
                   {paginatedUserRows.map((user) => (
                     <tr key={user.id}>
-                      <td>{user.id}</td>
-                      <td>{user.name}</td>
-                      <td>{user.email}</td>
-                      <td>{user.role}</td>
+                      <td className="users-col-user">
+                        <div className="users-cell-user">
+                          <span className="users-avatar" aria-hidden>
+                            {avatarInitialsFromDisplayName(user.displayName)}
+                          </span>
+                          <div className="users-cell-user-text">
+                            <span className="users-cell-name">{user.displayName}</span>
+                            <span className="users-cell-id">{user.id}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="users-col-email">
+                        <span className="users-cell-email">{user.email}</span>
+                      </td>
+                      <td className="users-col-phone">{user.phone}</td>
+                      <td className="users-col-kyc">
+                        <span
+                          className={`users-kyc-pill users-kyc-pill--${user.kycPill.className}`}
+                        >
+                          {user.kycPill.label}
+                        </span>
+                      </td>
+                      <td className="users-col-tickets">
+                        <div className="users-tickets-cell">
+                          {user.ticketCount != null ? (
+                            <span className="users-ticket-count" title="Ticket count from API">
+                              {user.ticketCount}
+                            </span>
+                          ) : null}
+                          <button
+                            type="button"
+                            className={
+                              user.ticketCount != null
+                                ? "users-tickets-btn users-tickets-btn--compact"
+                                : "users-tickets-btn"
+                            }
+                            onClick={() => handleNavigateUserTickets(user)}
+                            disabled={!user.ticketsNav?.enabled}
+                            title={
+                              !user.ticketsNav?.enabled
+                                ? "No user identifier available for ticket search"
+                                : undefined
+                            }
+                          >
+                            View Tickets
+                          </button>
+                        </div>
+                      </td>
+                      <td className="users-col-joined">{user.joinedOnDisplay}</td>
                       <td>
                         <span
-                          className={`status-badge users-status-pill ${user.status.toLowerCase()}`}
+                          className={`status-badge users-status-pill ${user.statusMeta?.pillClass ?? "unknown"}`}
                         >
-                          {user.status}
+                          {user.statusMeta?.label ?? "Unknown"}
                         </span>
                       </td>
                       <td className="users-actions-cell">
                         <button
                           type="button"
-                          className={`users-row-action users-row-toggle ${user.status === "Active" ? "deactivate" : "activate"}`}
+                          className={`users-row-action users-row-toggle ${user.statusMeta?.key === "ACTIVE" ? "deactivate" : "activate"}`}
                           onClick={() => handleUserStatusToggle(user.id)}
+                          disabled={!ADMIN_USER_STATUS_UPDATE_AVAILABLE}
+                          title={
+                            !ADMIN_USER_STATUS_UPDATE_AVAILABLE
+                              ? "Backend action not integrated yet"
+                              : undefined
+                          }
                         >
-                          {user.status === "Active" ? "Deactivate" : "Activate"}
+                          {user.statusMeta?.key === "ACTIVE" ? "Deactivate" : "Activate"}
                         </button>
                         <button
                           type="button"
                           className="users-row-action users-row-edit"
                           onClick={() => handleUserEdit(user.id)}
+                          disabled={!ADMIN_USER_EDIT_AVAILABLE}
+                          title={
+                            !ADMIN_USER_EDIT_AVAILABLE
+                              ? "Backend action not integrated yet"
+                              : undefined
+                          }
                         >
                           Edit
                         </button>
                       </td>
                     </tr>
                   ))}
-                  {!paginatedUserRows.length && (
+                  {!apiAdminUsersLoading && !paginatedUserRows.length && usersEmptyMessage ? (
                     <tr>
-                      <td colSpan={6} className="empty-table-row">
-                        No users found for this filter.
+                      <td colSpan={8} className="empty-table-row users-empty-table-msg">
+                        {usersEmptyMessage}
                       </td>
                     </tr>
-                  )}
+                  ) : null}
                 </tbody>
               </table>
             </div>
@@ -939,16 +2521,107 @@ export default function AdminDashboard() {
     }
 
     if (pageKey === "kyc") {
+      const kycSkeletonVisible = apiKycLoading && kycNormalizedRows.length === 0;
+      const kycEmptyDataset =
+        !apiKycLoading && !kycLoadError && kycNormalizedRows.length === 0;
+      const kycFilterEmpty =
+        !apiKycLoading && kycNormalizedRows.length > 0 && filteredKycRows.length === 0;
+
+      const renderKycStatusBadge = (row) => (
+        <span
+          className={`status-badge kyc-status-pill kyc-status-pill--${kycCanonicalSlug(row.canonicalStatus)}`}
+          title={row.statusRaw ? `API: ${row.statusRaw}` : undefined}
+        >
+          {row.displayStatus}
+        </span>
+      );
+
+      const kycRowActions = (row, compact) => {
+        const busy = kycActionBusyId === row.id;
+        const actionable = adminKycRowHasActionableId(row);
+        return (
+          <div className={compact ? "kyc-mod-actions kyc-mod-actions--stack" : "kyc-mod-actions"}>
+            <button
+              type="button"
+              className="users-row-action users-row-edit"
+              onClick={() => openKycDrawer(row)}
+            >
+              Details
+            </button>
+            <button
+              type="button"
+              className="users-row-action users-row-edit"
+              disabled={!actionable || busy || row.canonicalStatus === KYC_CANONICAL.VERIFIED}
+              title={!actionable ? "Missing application id from API" : undefined}
+              onClick={() => void handleKycApprove(row)}
+            >
+              {busy ? "…" : "Approve"}
+            </button>
+            <button
+              type="button"
+              className="users-row-action users-row-toggle deactivate"
+              disabled={!actionable || busy}
+              onClick={() => {
+                setKycRejectFor(row);
+                setKycRejectReasonDraft(row.rejectionReason || "");
+              }}
+            >
+              Reject
+            </button>
+            <button
+              type="button"
+              className="users-row-action kyc-row-action-info"
+              disabled={!actionable || busy}
+              onClick={() => {
+                setKycReuploadFor(row);
+                setKycReuploadNoteDraft("");
+              }}
+            >
+              Re-upload
+            </button>
+          </div>
+        );
+      };
+
       return (
         <section className="content-grid one-column">
-          <article className="panel users-management-shell">
-            <div className="users-metrics-grid">
+          <article className="panel users-management-shell kyc-moderation-shell">
+            <div className="kyc-mod-head">
+              <div>
+                <h3 className="kyc-mod-title">KYC moderation</h3>
+                <p className="kyc-mod-sub">
+                  Review submissions from the live queue. Actions call your admin API; no local-only
+                  state.
+                </p>
+              </div>
+              <div className="kyc-mod-head-actions">
+                <button
+                  type="button"
+                  className="users-row-action users-row-edit"
+                  onClick={() => void reloadKycList()}
+                  disabled={apiKycLoading}
+                >
+                  {apiKycLoading ? "Refreshing…" : "Refresh"}
+                </button>
+              </div>
+            </div>
+
+            {kycLoadError ? (
+              <div className="kyc-mod-banner kyc-mod-banner--error" role="alert">
+                <span>{kycLoadError}</span>
+                <button type="button" className="kyc-mod-banner-retry" onClick={() => void reloadKycList()}>
+                  Retry
+                </button>
+              </div>
+            ) : null}
+
+            <div className="users-metrics-grid kyc-metrics-grid">
               <article className="users-metric-card">
                 <div className="users-metric-head">
                   <span className="users-metric-icon users-metric-total">
                     <Icon name="kyc" />
                   </span>
-                  <p>Total Requests</p>
+                  <p>Total</p>
                 </div>
                 <strong>{kycStats.total}</strong>
               </article>
@@ -961,8 +2634,15 @@ export default function AdminDashboard() {
               </article>
               <article className="users-metric-card">
                 <div className="users-metric-head">
+                  <span className="users-metric-icon users-metric-review" />
+                  <p>Under review</p>
+                </div>
+                <strong>{kycStats.underReview}</strong>
+              </article>
+              <article className="users-metric-card">
+                <div className="users-metric-head">
                   <span className="users-metric-icon users-metric-active" />
-                  <p>Approved</p>
+                  <p>Verified</p>
                 </div>
                 <strong>{kycStats.approved}</strong>
               </article>
@@ -973,13 +2653,20 @@ export default function AdminDashboard() {
                 </div>
                 <strong>{kycStats.rejected}</strong>
               </article>
+              <article className="users-metric-card">
+                <div className="users-metric-head">
+                  <span className="users-metric-icon users-metric-reupload" />
+                  <p>Re-upload</p>
+                </div>
+                <strong>{kycStats.reupload}</strong>
+              </article>
             </div>
 
-            <div className="users-controls-row">
+            <div className="users-controls-row kyc-mod-controls">
               <input
                 type="text"
                 className="users-control-input users-control-search"
-                placeholder="Search by user, email or request ID"
+                placeholder="Search name, email, phone, document #, request id…"
                 value={kycSearchText}
                 onChange={(event) => setKycSearchText(event.target.value)}
               />
@@ -989,246 +2676,380 @@ export default function AdminDashboard() {
                   value={kycStatusFilter}
                   onChange={(event) => setKycStatusFilter(event.target.value)}
                 >
-                  <option value="All">Status: All</option>
-                  <option value="Pending">Status: Pending</option>
-                  <option value="Approved">Status: Approved</option>
-                  <option value="Rejected">Status: Rejected</option>
-                  <option value="Need Info">Status: Need Info</option>
+                  <option value="All">All statuses</option>
+                  <option value={KYC_CANONICAL.PENDING}>Pending</option>
+                  <option value={KYC_CANONICAL.UNDER_REVIEW}>Under review</option>
+                  <option value={KYC_CANONICAL.VERIFIED}>Verified</option>
+                  <option value={KYC_CANONICAL.REJECTED}>Rejected</option>
+                  <option value={KYC_CANONICAL.REUPLOAD_REQUIRED}>Re-upload required</option>
                 </select>
-                <span className="kyc-help-text">
-                  Need Info: Ask user to upload clear documents.
-                </span>
               </div>
             </div>
 
-            <div className="table-wrap users-table-wrap">
-              <table className="users-management-table">
+            <div className={`table-wrap users-table-wrap kyc-mod-table-desktop ${apiKycLoading && kycNormalizedRows.length > 0 ? "kyc-mod-table--dim" : ""}`}>
+              <table className="users-management-table kyc-mod-table">
                 <thead>
                   <tr>
-                    <th>Request ID</th>
-                    <th>User</th>
+                    <th>Applicant</th>
+                    <th>Phone</th>
                     <th>Document</th>
                     <th>Submitted</th>
                     <th>Status</th>
+                    <th>Risk</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredKycRows.map((request) => (
-                    <tr key={request.id}>
-                      <td>{request.id}</td>
-                      <td>
-                        <div>
-                          <strong>{request.userName}</strong>
-                          <p className="kyc-user-email">{request.userEmail}</p>
-                        </div>
-                      </td>
-                      <td>{request.documentType}</td>
-                      <td>{request.submittedAt}</td>
-                      <td>
-                        <span
-                          className={`status-badge kyc-status-pill ${request.status
-                            .toLowerCase()
-                            .replace(/\s+/g, "-")}`}
-                        >
-                          {request.status}
-                        </span>
-                      </td>
-                      <td className="users-actions-cell kyc-actions-cell">
-                        <button
-                          type="button"
-                          className="users-row-action users-row-edit"
-                          onClick={() =>
-                            updateKycStatus(request.id, "Approved")
-                          }
-                        >
-                          Approve
-                        </button>
-                        <button
-                          type="button"
-                          className="users-row-action users-row-toggle deactivate"
-                          onClick={() =>
-                            updateKycStatus(request.id, "Rejected")
-                          }
-                        >
-                          Reject
-                        </button>
-                        <button
-                          type="button"
-                          className="users-row-action kyc-row-action-info"
-                          onClick={() =>
-                            updateKycStatus(request.id, "Need Info")
-                          }
-                        >
-                          Need Info
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {!filteredKycRows.length && (
+                  {kycSkeletonVisible
+                    ? Array.from({ length: 6 }).map((_, sk) => (
+                        <tr key={`kyc-sk-${sk}`} className="kyc-mod-skeleton-row">
+                          <td colSpan={7}>
+                            <div className="kyc-mod-skeleton-line" />
+                          </td>
+                        </tr>
+                      ))
+                    : null}
+                  {!kycSkeletonVisible
+                    ? paginatedKycRows.map((row) => (
+                        <tr key={row.id}>
+                          <td>
+                            <div className="kyc-mod-usercell">
+                              <span className="kyc-mod-avatar" aria-hidden>
+                                {row.initials}
+                              </span>
+                              <div>
+                                <strong>{row.fullName}</strong>
+                                <p className="kyc-user-email">{row.email}</p>
+                                <p className="kyc-mod-mono kyc-mod-id">{row.id}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td>{row.phone}</td>
+                          <td>
+                            <div className="kyc-mod-doccell">
+                              <span>{row.documentType}</span>
+                              {row.documentNumber !== "—" ? (
+                                <span className="kyc-mod-mono">{row.documentNumber}</span>
+                              ) : null}
+                            </div>
+                          </td>
+                          <td>{row.submittedAt}</td>
+                          <td>{renderKycStatusBadge(row)}</td>
+                          <td>
+                            {row.riskFlag ? (
+                              <span className="kyc-mod-risk" title="Flagged for review">
+                                Flagged
+                              </span>
+                            ) : (
+                              <span className="kyc-mod-muted">—</span>
+                            )}
+                          </td>
+                          <td className="users-actions-cell kyc-actions-cell">{kycRowActions(row, false)}</td>
+                        </tr>
+                      ))
+                    : null}
+                  {!kycSkeletonVisible && kycEmptyDataset ? (
                     <tr>
-                      <td colSpan={6} className="empty-table-row">
-                        No KYC requests found for this filter.
+                      <td colSpan={7} className="empty-table-row">
+                        No KYC applications in the queue yet.
                       </td>
                     </tr>
-                  )}
+                  ) : null}
+                  {!kycSkeletonVisible && kycFilterEmpty ? (
+                    <tr>
+                      <td colSpan={7} className="empty-table-row">
+                        No rows match this search or filter.
+                      </td>
+                    </tr>
+                  ) : null}
                 </tbody>
               </table>
             </div>
+
+            <div className="kyc-mod-cards" aria-label="KYC applications (mobile layout)">
+              {kycSkeletonVisible
+                ? Array.from({ length: 4 }).map((_, i) => (
+                    <div key={`kyc-card-sk-${i}`} className="kyc-mod-card kyc-mod-card--skeleton">
+                      <div className="kyc-mod-skeleton-line kyc-mod-skeleton-line--lg" />
+                      <div className="kyc-mod-skeleton-line" />
+                      <div className="kyc-mod-skeleton-line kyc-mod-skeleton-line--sm" />
+                    </div>
+                  ))
+                : null}
+              {!kycSkeletonVisible
+                ? paginatedKycRows.map((row) => (
+                    <div key={`m-${row.id}`} className="kyc-mod-card">
+                      <div className="kyc-mod-card-top">
+                        <span className="kyc-mod-avatar" aria-hidden>
+                          {row.initials}
+                        </span>
+                        <div className="kyc-mod-card-top-text">
+                          <strong>{row.fullName}</strong>
+                          <span className="kyc-user-email">{row.email}</span>
+                          {renderKycStatusBadge(row)}
+                        </div>
+                      </div>
+                      <dl className="kyc-mod-dl">
+                        <div>
+                          <dt>Phone</dt>
+                          <dd>{row.phone}</dd>
+                        </div>
+                        <div>
+                          <dt>Document</dt>
+                          <dd>
+                            {row.documentType}
+                            {row.documentNumber !== "—" ? ` · ${row.documentNumber}` : ""}
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Submitted</dt>
+                          <dd>{row.submittedAt}</dd>
+                        </div>
+                      </dl>
+                      {kycRowActions(row, true)}
+                    </div>
+                  ))
+                : null}
+              {!kycSkeletonVisible && (kycEmptyDataset || kycFilterEmpty) ? (
+                <div className="kyc-mod-card kyc-mod-card--empty" role="status">
+                  {kycEmptyDataset ? "No applications in the queue." : "No matches for this filter."}
+                </div>
+              ) : null}
+            </div>
+
+            <div className="users-pagination-row kyc-mod-pagination">
+              <button
+                type="button"
+                className="users-page-btn"
+                onClick={() => setKycPage((p) => Math.max(1, p - 1))}
+                disabled={kycPage === 1}
+              >
+                Previous
+              </button>
+              <span className="kyc-mod-page-label">
+                Page {kycPage} / {totalKycPages} · {filteredKycRows.length} row
+                {filteredKycRows.length === 1 ? "" : "s"}
+              </span>
+              <button
+                type="button"
+                className="users-page-btn"
+                onClick={() => setKycPage((p) => Math.min(totalKycPages, p + 1))}
+                disabled={kycPage === totalKycPages}
+              >
+                Next
+              </button>
+            </div>
           </article>
+
+          {kycDrawerRow ? (
+            <div
+              className="kyc-mod-drawer-backdrop"
+              role="presentation"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) closeKycDrawer();
+              }}
+            >
+              <aside className="kyc-mod-drawer" role="dialog" aria-modal="true" aria-labelledby="kyc-drawer-title">
+                <div className="kyc-mod-drawer-head">
+                  <div>
+                    <p className="kyc-mod-drawer-kicker">Application</p>
+                    <h4 id="kyc-drawer-title" className="kyc-mod-drawer-title">
+                      {kycDrawerRow.fullName}
+                    </h4>
+                    <p className="kyc-user-email">{kycDrawerRow.email}</p>
+                  </div>
+                  <button type="button" className="kyc-mod-drawer-close" onClick={closeKycDrawer}>
+                    Close
+                  </button>
+                </div>
+                <div className="kyc-mod-drawer-body">
+                  {renderKycStatusBadge(kycDrawerRow)}
+                  <dl className="kyc-mod-detail-grid">
+                    <div>
+                      <dt>Request ID</dt>
+                      <dd className="kyc-mod-mono">{kycDrawerRow.id}</dd>
+                    </div>
+                    <div>
+                      <dt>Phone</dt>
+                      <dd>{kycDrawerRow.phone}</dd>
+                    </div>
+                    <div>
+                      <dt>Date of birth</dt>
+                      <dd>{kycDrawerRow.dateOfBirth}</dd>
+                    </div>
+                    <div>
+                      <dt>Country</dt>
+                      <dd>{kycDrawerRow.country}</dd>
+                    </div>
+                    <div className="kyc-mod-detail-span">
+                      <dt>Address</dt>
+                      <dd>{kycDrawerRow.address}</dd>
+                    </div>
+                    <div>
+                      <dt>Document type</dt>
+                      <dd>{kycDrawerRow.documentType}</dd>
+                    </div>
+                    <div>
+                      <dt>Document #</dt>
+                      <dd className="kyc-mod-mono">{kycDrawerRow.documentNumber}</dd>
+                    </div>
+                    <div>
+                      <dt>Submitted</dt>
+                      <dd>{kycDrawerRow.submittedAt}</dd>
+                    </div>
+                    <div>
+                      <dt>Reviewed by</dt>
+                      <dd>{kycDrawerRow.reviewedBy}</dd>
+                    </div>
+                    <div>
+                      <dt>Reviewed at</dt>
+                      <dd>{kycDrawerRow.reviewedAt}</dd>
+                    </div>
+                  </dl>
+                  {kycDrawerRow.rejectionReason ? (
+                    <div className="kyc-mod-note">
+                      <strong>Rejection / notes</strong>
+                      <p>{kycDrawerRow.rejectionReason}</p>
+                    </div>
+                  ) : null}
+                  <div className="kyc-mod-docs">
+                    <AdminKycDocPreviews row={kycDrawerRow} />
+                  </div>
+                  <div className="kyc-mod-drawer-actions">
+                    <button
+                      type="button"
+                      className="users-row-action users-row-edit"
+                      disabled={
+                        !adminKycRowHasActionableId(kycDrawerRow) ||
+                        kycActionBusyId === kycDrawerRow.id ||
+                        kycDrawerRow.canonicalStatus === KYC_CANONICAL.VERIFIED
+                      }
+                      onClick={() => void handleKycApprove(kycDrawerRow)}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="users-row-action users-row-toggle deactivate"
+                      disabled={!adminKycRowHasActionableId(kycDrawerRow) || kycActionBusyId === kycDrawerRow.id}
+                      onClick={() => {
+                        setKycRejectFor(kycDrawerRow);
+                        setKycRejectReasonDraft(kycDrawerRow.rejectionReason || "");
+                      }}
+                    >
+                      Reject…
+                    </button>
+                    <button
+                      type="button"
+                      className="users-row-action kyc-row-action-info"
+                      disabled={!adminKycRowHasActionableId(kycDrawerRow) || kycActionBusyId === kycDrawerRow.id}
+                      onClick={() => {
+                        setKycReuploadFor(kycDrawerRow);
+                        setKycReuploadNoteDraft("");
+                      }}
+                    >
+                      Request re-upload…
+                    </button>
+                    <button
+                      type="button"
+                      className="users-row-action users-row-edit"
+                      disabled={!adminKycRowHasActionableId(kycDrawerRow) || kycActionBusyId === kycDrawerRow.id}
+                      onClick={() => void handleKycMarkUnderReview(kycDrawerRow)}
+                    >
+                      Mark under review
+                    </button>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          ) : null}
+
+          {kycRejectFor ? (
+            <div
+              className="kyc-mod-modal-backdrop"
+              role="presentation"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setKycRejectFor(null);
+              }}
+            >
+              <div className="kyc-mod-modal" role="dialog" aria-modal="true" aria-labelledby="kyc-reject-title">
+                <h4 id="kyc-reject-title">Reject KYC</h4>
+                <p className="kyc-mod-muted">
+                  {kycRejectFor.fullName} · <span className="kyc-mod-mono">{kycRejectFor.id}</span>
+                </p>
+                <label className="kyc-mod-label" htmlFor="kyc-reject-reason">
+                  Reason (optional, sent if API accepts JSON body)
+                </label>
+                <textarea
+                  id="kyc-reject-reason"
+                  className="kyc-mod-textarea"
+                  rows={4}
+                  value={kycRejectReasonDraft}
+                  onChange={(e) => setKycRejectReasonDraft(e.target.value)}
+                />
+                <div className="kyc-mod-modal-actions">
+                  <button type="button" className="users-page-btn" onClick={() => setKycRejectFor(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="users-row-action users-row-toggle deactivate"
+                    disabled={kycActionBusyId === kycRejectFor.id}
+                    onClick={() => void handleKycRejectConfirm()}
+                  >
+                    {kycActionBusyId === kycRejectFor.id ? "Submitting…" : "Confirm reject"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          {kycReuploadFor ? (
+            <div
+              className="kyc-mod-modal-backdrop"
+              role="presentation"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setKycReuploadFor(null);
+              }}
+            >
+              <div className="kyc-mod-modal" role="dialog" aria-modal="true" aria-labelledby="kyc-reupload-title">
+                <h4 id="kyc-reupload-title">Request document re-upload</h4>
+                <p className="kyc-mod-muted">
+                  Sets status to <code>REUPLOAD_REQUIRED</code> via{" "}
+                  <code className="kyc-mod-mono">PATCH /admin/kyc/:id/status</code> on the live API.
+                </p>
+                <label className="kyc-mod-label" htmlFor="kyc-reupload-note">
+                  Note to user (optional)
+                </label>
+                <textarea
+                  id="kyc-reupload-note"
+                  className="kyc-mod-textarea"
+                  rows={3}
+                  value={kycReuploadNoteDraft}
+                  onChange={(e) => setKycReuploadNoteDraft(e.target.value)}
+                />
+                <div className="kyc-mod-modal-actions">
+                  <button type="button" className="users-page-btn" onClick={() => setKycReuploadFor(null)}>
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="users-row-action users-row-edit"
+                    disabled={kycActionBusyId === kycReuploadFor.id}
+                    onClick={() => void handleKycRequestReupload()}
+                  >
+                    {kycActionBusyId === kycReuploadFor.id ? "Submitting…" : "Send request"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </section>
       );
     }
 
     if (pageKey === "apps") {
-      return (
-        <section className="content-grid one-column">
-          <article className="panel apps-manager-shell">
-            <div className="panel-head apps-manager-head">
-              <h3>App Management</h3>
-              <p>Add new apps and manage uploaded apps from one place.</p>
-            </div>
-
-            <div className="apps-manager-grid">
-              <form className="apps-form-panel" onSubmit={handleAppSubmit}>
-                <h4>{editingAppId ? "Edit App" : "Add New App"}</h4>
-
-                <label htmlFor="app-name">App Name</label>
-                <input
-                  id="app-name"
-                  type="text"
-                  value={appForm.name}
-                  onChange={(event) =>
-                    handleAppFormChange("name", event.target.value)
-                  }
-                  placeholder="Enter app name"
-                />
-
-                <label htmlFor="app-description">Description</label>
-                <textarea
-                  id="app-description"
-                  value={appForm.description}
-                  onChange={(event) =>
-                    handleAppFormChange("description", event.target.value)
-                  }
-                  placeholder="Enter app description"
-                />
-
-                <label htmlFor="app-logo-upload">Logo Upload</label>
-                <div className="apps-logo-row">
-                  <label
-                    htmlFor="app-logo-upload"
-                    className="secondary-btn upload-btn"
-                  >
-                    Upload Logo
-                  </label>
-                  <input
-                    id="app-logo-upload"
-                    type="file"
-                    accept="image/*"
-                    onChange={handleAppLogoUpload}
-                  />
-                  <div className="apps-logo-preview">
-                    {appForm.logoUrl ? (
-                      <img src={appForm.logoUrl} alt="App logo preview" />
-                    ) : (
-                      <span>Logo Preview</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="apps-form-actions">
-                  <button type="submit" className="primary-btn">
-                    {editingAppId ? "Update App" : "Add App"}
-                  </button>
-                  <button
-                    type="button"
-                    className="secondary-btn"
-                    onClick={resetAppForm}
-                  >
-                    Clear
-                  </button>
-                </div>
-              </form>
-
-              <div className="apps-list-panel">
-                <div className="apps-list-toolbar">
-                  <h4>Uploaded Apps</h4>
-                  <input
-                    type="text"
-                    placeholder="Search apps..."
-                    value={appSearchText}
-                    onChange={(event) => setAppSearchText(event.target.value)}
-                  />
-                </div>
-
-                <div className="table-wrap apps-table-wrap">
-                  <table className="apps-management-table">
-                    <thead>
-                      <tr>
-                        <th>Logo</th>
-                        <th>App Name</th>
-                        <th>Description</th>
-                        <th>Status</th>
-                        <th>Actions</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredApps.map((app) => (
-                        <tr key={app.id}>
-                          <td>
-                            <div className="apps-logo-cell">
-                              {app.logoUrl ? (
-                                <img src={app.logoUrl} alt={app.name} />
-                              ) : (
-                                <span>
-                                  {app.name.slice(0, 1).toUpperCase()}
-                                </span>
-                              )}
-                            </div>
-                          </td>
-                          <td>{app.name}</td>
-                          <td>{app.description}</td>
-                          <td>
-                            <span
-                              className={`status-badge ${app.status === "Active" ? "active-user" : "pending"}`}
-                            >
-                              {app.status}
-                            </span>
-                          </td>
-                          <td className="apps-actions-cell">
-                            <button
-                              type="button"
-                              className="users-row-action users-row-edit"
-                              onClick={() => handleAppEdit(app)}
-                            >
-                              Edit
-                            </button>
-                            <button
-                              type="button"
-                              className="users-row-action users-row-toggle deactivate"
-                              onClick={() => handleAppDelete(app.id)}
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                      {!filteredApps.length && (
-                        <tr>
-                          <td colSpan={5} className="empty-table-row">
-                            No apps found.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          </article>
-        </section>
-      );
+      return <AdminAppsSection />;
     }
 
     if (pageKey === "billing") {
@@ -1272,6 +3093,7 @@ export default function AdminDashboard() {
     }
 
     if (pageKey === "tickets") {
+      const resolved = normalizeTicketStatus(activeTicket?.status) === "RESOLVED";
       return (
         <section className="content-grid one-column">
           <article className="panel tickets-admin-shell">
@@ -1287,19 +3109,19 @@ export default function AdminDashboard() {
             <div className="tickets-stats-grid">
               <article className="tickets-stat-card total">
                 <p>Total Tickets</p>
-                <strong>{ticketStats.total}</strong>
+                <strong>{computedTicketStats.total}</strong>
               </article>
               <article className="tickets-stat-card open">
                 <p>Open</p>
-                <strong>{ticketStats.open}</strong>
+                <strong>{computedTicketStats.open}</strong>
               </article>
               <article className="tickets-stat-card pending">
                 <p>Pending</p>
-                <strong>{ticketStats.pending}</strong>
+                <strong>{computedTicketStats.pending}</strong>
               </article>
               <article className="tickets-stat-card resolved">
                 <p>Resolved</p>
-                <strong>{ticketStats.resolved}</strong>
+                <strong>{computedTicketStats.resolved}</strong>
               </article>
             </div>
 
@@ -1311,16 +3133,29 @@ export default function AdminDashboard() {
                 onChange={(event) => setTicketSearchText(event.target.value)}
                 placeholder="Search by user or subject"
               />
-              <select
-                className="tickets-toolbar-input"
-                value={ticketStatusFilter}
-                onChange={(event) => setTicketStatusFilter(event.target.value)}
-              >
-                <option value="All">Status: All</option>
-                <option value="Open">Status: Open</option>
-                <option value="Pending">Status: Pending</option>
-                <option value="Resolved">Status: Resolved</option>
-              </select>
+              <div className="tickets-filter-tabs" role="tablist" aria-label="Ticket status">
+                {[
+                  { key: "All", label: "All", count: computedTicketStats.total },
+                  { key: "OPEN", label: "Open", count: computedTicketStats.open },
+                  { key: "PENDING", label: "Pending", count: computedTicketStats.pending },
+                  { key: "RESOLVED", label: "Resolved", count: computedTicketStats.resolved },
+                ].map(({ key, label, count }) => {
+                  const active = ticketStatusFilter === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      className={`tickets-filter-tab ${active ? "active" : ""}`}
+                      onClick={() => setTicketStatusFilter(key)}
+                    >
+                      <span className="tickets-filter-tab-label">{label}</span>
+                      <span className="tickets-filter-tab-count">{Number(count) || 0}</span>
+                    </button>
+                  );
+                })}
+              </div>
               <select
                 className="tickets-toolbar-input"
                 value={ticketPriorityFilter}
@@ -1335,168 +3170,140 @@ export default function AdminDashboard() {
               </select>
             </div>
 
-            <div className="table-wrap tickets-table-wrap">
-              {ticketsLoading ? (
-                <div className="tickets-loading-state">Loading tickets...</div>
-              ) : (
-                <table className="tickets-management-table">
-                  <thead>
-                    <tr>
-                      <th>Ticket ID</th>
-                      <th>User Name</th>
-                      <th>Subject</th>
-                      <th>Priority</th>
-                      <th>Status</th>
-                      <th>Date</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredTicketRows.map((ticket) => (
-                      <tr key={ticket.id}>
-                        <td>{ticket.id}</td>
-                        <td>{ticket.userName}</td>
-                        <td>{ticket.subject}</td>
-                        <td>
-                          <TicketBadge
-                            type="priority"
-                            value={ticket.priority}
-                          />
-                        </td>
-                        <td>
-                          <select
-                            className="tickets-status-select"
-                            value={ticket.status}
-                            onChange={(event) =>
-                              updateTicketStatus(ticket.id, event.target.value)
-                            }
-                          >
-                            <option value="Open">Open</option>
-                            <option value="Pending">Pending</option>
-                            <option value="Resolved">Resolved</option>
-                          </select>
-                        </td>
-                        <td>{ticket.date}</td>
-                        <td>
-                          <button
-                            type="button"
-                            className="tickets-view-btn"
-                            onClick={() => handleViewTicket(ticket.id)}
-                          >
-                            View
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {!filteredTicketRows.length && (
-                      <tr>
-                        <td colSpan={7} className="empty-table-row">
-                          No tickets found.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            {selectedTicket ? (
-              <div
-                className="ticket-detail-overlay"
-                role="dialog"
-                aria-modal="true"
-              >
-                <div className="ticket-detail-panel">
-                  <div className="ticket-detail-head">
-                    <div>
-                      <h4>{selectedTicket.subject}</h4>
-                      <p>
-                        {selectedTicket.id} • {selectedTicket.userName}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="ticket-detail-close"
-                      onClick={closeTicketPanel}
-                    >
-                      Close
-                    </button>
-                  </div>
-
-                  <div className="ticket-detail-meta">
-                    <TicketBadge type="status" value={selectedTicket.status} />
-                    <TicketBadge
-                      type="priority"
-                      value={selectedTicket.priority}
-                    />
-                  </div>
-
-                  <section className="ticket-detail-block">
-                    <h5>Description</h5>
-                    <p>{selectedTicket.description}</p>
-                  </section>
-
-                  <section className="ticket-detail-block">
-                    <h5>User Info</h5>
-                    <p>{selectedTicket.userName}</p>
-                    <small>{selectedTicket.userEmail}</small>
-                  </section>
-
-                  <section className="ticket-detail-block">
-                    <h5>Conversation</h5>
-                    <div className="ticket-chat-list">
-                      {selectedTicket.conversation.map((message) => (
-                        <div
-                          key={message.id}
-                          className={`ticket-chat-item ${message.sender}`}
-                        >
-                          <p>{message.text}</p>
-                          <small>{message.time}</small>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-
-                  <div className="ticket-reply-box">
-                    <textarea
-                      value={ticketReplyText}
-                      onChange={(event) =>
-                        setTicketReplyText(event.target.value)
-                      }
-                      placeholder="Type your reply..."
-                    />
-                    <button
-                      type="button"
-                      className="primary-btn"
-                      onClick={handleSendTicketReply}
-                    >
-                      Send Reply
-                    </button>
-                  </div>
-
-                  <div className="ticket-detail-actions">
-                    <button
-                      type="button"
-                      className="primary-btn"
-                      onClick={() =>
-                        updateTicketStatus(selectedTicket.id, "Resolved")
-                      }
-                    >
-                      Mark as Resolved
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-btn"
-                      onClick={() =>
-                        updateTicketStatus(selectedTicket.id, "Open")
-                      }
-                    >
-                      Reopen Ticket
-                    </button>
-                  </div>
+            <div className="tickets-inbox">
+              <div className="tickets-inbox-list">
+                <div className="tickets-inbox-list-head">
+                  <strong>Inbox</strong>
+                  <button
+                    type="button"
+                    className="tickets-inbox-refresh"
+                    onClick={() => void refreshAdminTickets({ reason: "manual refresh" })}
+                    disabled={apiTicketsForAdminPagesLoading}
+                  >
+                    {apiTicketsForAdminPagesLoading ? "Refreshing…" : "Refresh"}
+                  </button>
                 </div>
+
+                {apiTicketsForAdminPagesLoading && !filteredTicketRows.length ? (
+                  <div className="tickets-loading-state">Loading tickets...</div>
+                ) : (
+                  <div className="tickets-inbox-rows" role="list">
+                    {filteredTicketRows.map((t) => {
+                      const id = String(t.id);
+                      const active = String(selectedTicketId || "") === id;
+                      const updatedRaw = t?.updatedAt || t?.lastUpdatedAt || t?.createdAt || t?.date;
+                      const updated = updatedRaw ? new Date(updatedRaw).toLocaleString() : "";
+                      const preview = String(t?.description || t?.subject || "").trim();
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          className={`tickets-inbox-row ${active ? "active" : ""}`}
+                          onClick={() => handleViewTicket(id)}
+                          role="listitem"
+                        >
+                          <div className="tickets-inbox-row-top">
+                            <div className="tickets-inbox-title">
+                              <span className="tickets-inbox-subject">{t.subject}</span>
+                              <span className="tickets-inbox-id">#{id}</span>
+                            </div>
+                            <span className="tickets-inbox-time">{updated}</span>
+                          </div>
+                          <div className="tickets-inbox-row-mid">
+                            <span className="tickets-inbox-user">
+                              {t.userName}
+                              {t.userEmail && t.userEmail !== "—" ? ` · ${t.userEmail}` : ""}
+                            </span>
+                            <span className="tickets-inbox-pills">
+                              <TicketBadge type="status" value={normalizeTicketStatus(t.status)} />
+                            </span>
+                          </div>
+                          {preview ? (
+                            <div className="tickets-inbox-preview">{preview}</div>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                    {!filteredTicketRows.length ? (
+                      <div className="tickets-inbox-empty">
+                        {ticketStatusFilter !== "All" ? (
+                          <>
+                            No tickets in this view.
+                            <div className="tickets-inbox-empty-hint">
+                              Try <strong>All</strong> or <strong>Pending</strong> — the backend may move
+                              tickets to Pending after a user replies.
+                            </div>
+                          </>
+                        ) : (
+                          "No tickets found."
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
-            ) : null}
+
+              <div className="tickets-inbox-panel">
+                {selectedTicketId ? (
+                  <TicketConversation
+                    title={activeTicket?.title || activeTicket?.subject || "Ticket"}
+                    meta={`${selectedTicketId} • ${activeTicket?.userName || ""}${activeTicket?.userEmail ? ` • ${activeTicket.userEmail}` : ""}`}
+                    status={normalizeTicketStatus(activeTicket?.status || "OPEN")}
+                    messages={activeMessages}
+                    viewerIsAdmin
+                    canReply={!resolved}
+                    resolvedNotice={resolved}
+                    rightLabel="Admin"
+                    leftLabel="User"
+                    onSend={handleSendTicketReply}
+                    headerActions={
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <button
+                          type="button"
+                          className="tickets-panel-action primary"
+                          disabled={resolved}
+                          onClick={() =>
+                            void (async () => {
+                              try {
+                                await adminDashboardApi.patchTicketStatus(selectedTicketId, "RESOLVED");
+                                await refreshAdminTickets({ reason: "inbox resolve" });
+                                await loadActiveTicket({ reason: "inbox resolve→resync" });
+                                showSuccess("Ticket resolved");
+                              } catch (e) {
+                                showApiErrorToast("Failed to resolve ticket", e);
+                              }
+                            })()
+                          }
+                        >
+                          Resolve
+                        </button>
+                        <button
+                          type="button"
+                          className="tickets-panel-action"
+                          onClick={() => void loadActiveTicket({ reason: "manual conversation refresh" })}
+                        >
+                          Refresh
+                        </button>
+                        <button
+                          type="button"
+                          className="tickets-panel-action"
+                          onClick={closeTicketPanel}
+                        >
+                          Back
+                        </button>
+                      </div>
+                    }
+                  />
+                ) : (
+                  <div className="tickets-inbox-placeholder">
+                    <div>
+                      <h4>Select a ticket</h4>
+                      <p>Choose a ticket from the left to view the conversation.</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </article>
         </section>
       );
@@ -1510,7 +3317,7 @@ export default function AdminDashboard() {
               <h3>Notifications and Activity</h3>
             </div>
             <ul className="timeline">
-              {filteredActivity.map((entry) => (
+              {dashboardActivityToRender.map((entry) => (
                 <li key={`${entry.time}-${entry.event}`}>
                   <span className="timeline-dot" />
                   <div>
@@ -1702,7 +3509,7 @@ export default function AdminDashboard() {
                       </button>
                     </div>
                     <ul>
-                      {notificationItems.map((item) => (
+                      {apiNotificationItems.map((item) => (
                         <li key={item.id}>
                           <button
                             type="button"

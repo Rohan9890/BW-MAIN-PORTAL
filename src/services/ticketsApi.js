@@ -1,4 +1,5 @@
 import { apiClient } from "./apiClient";
+import { backendJson } from "./backendClient";
 import { endpoints } from "./endpoints";
 import { mockData } from "./mockData";
 import { cloneDeep, safeServiceCall } from "./serviceUtils";
@@ -6,7 +7,18 @@ import { cloneDeep, safeServiceCall } from "./serviceUtils";
 export const ticketsApi = {
   async getTickets(params) {
     return safeServiceCall({
-      request: () => apiClient.get(endpoints.tickets.all, { query: params }),
+      request: async () => {
+        try {
+          const response = await backendJson(endpoints.tickets.all, {
+            method: "GET",
+            query: params,
+          });
+          return response?.data ?? response ?? {};
+        } catch {
+          const response = await apiClient.get(endpoints.tickets.all, { query: params });
+          return response?.data ?? response ?? {};
+        }
+      },
       fallback: {
         items: cloneDeep(mockData.admin.tickets),
         total: mockData.admin.tickets.length,
@@ -16,7 +28,15 @@ export const ticketsApi = {
 
   async getTicketById(ticketId) {
     return safeServiceCall({
-      request: () => apiClient.get(endpoints.tickets.byId(ticketId)),
+      request: async () => {
+        try {
+          const response = await backendJson(endpoints.tickets.byId(ticketId), { method: "GET" });
+          return response?.data ?? response ?? {};
+        } catch {
+          const response = await apiClient.get(endpoints.tickets.byId(ticketId));
+          return response?.data ?? response ?? {};
+        }
+      },
       fallback:
         cloneDeep(
           mockData.admin.tickets.find((item) => item.id === ticketId),

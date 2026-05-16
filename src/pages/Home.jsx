@@ -6,6 +6,8 @@ import { useNotificationInbox } from "../context/NotificationInboxContext";
 import { applicationBackend } from "../services/backendApis";
 import { resolveNotificationNav } from "../services/notificationUtils";
 import { dashboardApi } from "../services";
+import { onAppsCatalogChanged } from "../services/uiEvents";
+import { openUserCatalogApp } from "../utils/appNavigation";
 import { PageEmpty, PageError, PageLoading } from "../components/PageStates";
 import "./Home.css";
 
@@ -90,33 +92,30 @@ export default function Home() {
   const [error, setError] = useState("");
   const [homeData, setHomeData] = useState({});
 
-  useEffect(() => {
-    let isMounted = true;
+  const [homeReloadToken, setHomeReloadToken] = useState(0);
 
-    const loadHomeData = async () => {
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
       setLoading(true);
       setError("");
       try {
         const response = await dashboardApi.getHomeData();
-        if (!isMounted) return;
-
+        if (cancel) return;
         setHomeData(response || {});
       } catch (serviceError) {
-        if (!isMounted) return;
+        if (cancel) return;
         setError(serviceError?.message || "Unable to load dashboard.");
       } finally {
-        if (isMounted) {
-          setLoading(false);
-        }
+        if (!cancel) setLoading(false);
       }
-    };
-
-    loadHomeData();
-
+    })();
     return () => {
-      isMounted = false;
+      cancel = true;
     };
-  }, []);
+  }, [homeReloadToken]);
+
+  useEffect(() => onAppsCatalogChanged(() => setHomeReloadToken((t) => t + 1)), []);
 
   // Home-only styling hook (no app logic/APIs affected): allows CSS to target header on this route only.
   useEffect(() => {
@@ -165,14 +164,23 @@ export default function Home() {
   const displayFirstName = greetingFirstToken || "there";
 
   const handleOpenCatalogApp = (app) => {
-    const url = String(app?.appUrl || "").trim();
-    const id = app?.appId;
-    if (!url) {
-      navigate("/all-apps");
-      return;
-    }
-    window.open(url, "_blank", "noopener,noreferrer");
-    if (id) applicationBackend.open(id).catch(() => {});
+    void openUserCatalogApp(
+      {
+        appId: app?.appId ?? app?.id,
+        status: app?.status,
+        externalUrl: app?.externalUrl,
+        routePath: app?.routePath ?? app?.route,
+        appUrl: app?.appUrl ?? app?.url,
+      },
+      {
+        navigate,
+        applicationBackend,
+        onAfterOpen: () => {},
+      },
+    ).then((r) => {
+      if (!r.ok && r.reason === "unpublished") navigate("/all-apps");
+      else if (!r.ok && r.reason === "no-target") navigate("/all-apps");
+    });
   };
 
   const handleNotifRowClick = async (n) => {

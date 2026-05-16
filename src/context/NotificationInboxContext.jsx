@@ -10,7 +10,7 @@ import {
 import { useAuth } from "./AuthContext";
 import { notificationsBackend } from "../services/backendApis";
 import { invalidateDashboardData } from "../services/dashboardInvalidate";
-import { mapNotificationRows } from "../services/notificationUtils";
+import { mapNotificationRows, parseUnreadCountPayload } from "../services/notificationUtils";
 import { withRetryOnce } from "../services/withRetryOnce";
 import { showError, showSuccess } from "../services/toast";
 
@@ -68,21 +68,31 @@ export function NotificationInboxProvider({ children }) {
       setError("");
       setRetrying(false);
       try {
-        const page = await withRetryOnce(
-          () => notificationsBackend.list({ page: 0, size: 20, ...QUIET }),
-          { onRetrying: () => {
-              if (mountedRef.current) setRetrying(true);
+        const [page, countRes] = await Promise.all([
+          withRetryOnce(
+            () => notificationsBackend.list({ page: 0, size: 10, ...QUIET }),
+            {
+              onRetrying: () => {
+                if (mountedRef.current) setRetrying(true);
+              },
             },
-          },
-        );
+          ),
+          notificationsBackend.unreadCount(QUIET).catch(() => null),
+        ]);
         if (!mountedRef.current) return;
         const rows = mapNotificationRows(page);
         cacheRef.current = { at: Date.now(), rows };
         setNotifications(rows);
-        setUnreadCount(computeUnread(rows));
+        const fromServer = parseUnreadCountPayload(countRes);
+        const fromRows = computeUnread(rows);
+        setUnreadCount(fromServer != null ? fromServer : fromRows);
       } catch (e) {
         if (!mountedRef.current) return;
-        const msg = e?.message || "Could not load notifications.";
+        const status = e?.status;
+        const msg =
+          status === 401
+            ? "Notifications are unavailable right now. You remain signed in."
+            : e?.message || "Could not load notifications.";
         setError(msg);
         if (!cacheRef.current.rows?.length) {
           setNotifications([]);

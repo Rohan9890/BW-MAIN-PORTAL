@@ -1,4 +1,5 @@
 import { apiClient } from "./apiClient";
+import { backendJson } from "./backendClient";
 import { endpoints } from "./endpoints";
 import { mockData } from "./mockData";
 import { cloneDeep, safeServiceCall } from "./serviceUtils";
@@ -6,7 +7,18 @@ import { cloneDeep, safeServiceCall } from "./serviceUtils";
 export const usersApi = {
   async getUsers(params) {
     return safeServiceCall({
-      request: () => apiClient.get(endpoints.users.list, { query: params }),
+      request: async () => {
+        try {
+          const response = await backendJson(endpoints.users.list, {
+            method: "GET",
+            query: params,
+          });
+          return response?.data ?? response ?? {};
+        } catch {
+          const response = await apiClient.get(endpoints.users.list, { query: params });
+          return response?.data ?? response ?? {};
+        }
+      },
       fallback: {
         items: cloneDeep(mockData.admin.users),
         total: mockData.admin.users.length,
@@ -16,7 +28,15 @@ export const usersApi = {
 
   async getUserById(userId) {
     return safeServiceCall({
-      request: () => apiClient.get(endpoints.users.byId(userId)),
+      request: async () => {
+        try {
+          const response = await backendJson(endpoints.users.byId(userId), { method: "GET" });
+          return response?.data ?? response ?? {};
+        } catch {
+          const response = await apiClient.get(endpoints.users.byId(userId));
+          return response?.data ?? response ?? {};
+        }
+      },
       fallback:
         cloneDeep(mockData.admin.users.find((item) => item.id === userId)) ||
         null,

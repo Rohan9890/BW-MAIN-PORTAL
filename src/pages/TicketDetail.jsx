@@ -1,57 +1,125 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { PageError, PageLoading } from "../components/PageStates";
 import { ticketsBackend } from "../services/backendApis";
 import { showError, showSuccess } from "../services/toast";
+import { getTicketStatusLabel } from "../utils/ticketStatus";
+import TicketConversation from "../components/TicketConversation";
+import {
+  mergeMessages,
+  normalizeTicketResponse,
+  normalizeTicketStatus,
+  normalizeTicketThread,
+} from "../utils/ticketConversation";
+
+// Active conversation should feel live (poll only while visible).
+const TICKET_DETAIL_POLL_MS = 10_000;
 
 function safeStr(v) {
   const s = String(v ?? "").trim();
   return s && s !== "null" ? s : "";
 }
 
-function normalizeMessages(ticket) {
-  const msgs = ticket?.messages || ticket?.replies || ticket?.conversation || ticket?.thread;
-  if (Array.isArray(msgs)) return msgs;
-  return [];
-}
-
-function isUserMessage(m) {
-  const role = safeStr(m?.role || m?.senderRole || m?.fromRole).toUpperCase();
-  const sender = safeStr(m?.sender || m?.author || m?.from).toUpperCase();
-  const type = safeStr(m?.senderType || m?.type).toUpperCase();
-  if (type === "USER" || type === "CUSTOMER") return true;
-  if (role === "USER" || role === "CUSTOMER") return true;
-  if (sender === "USER" || sender === "YOU" || sender === "ME") return true;
-  if (m?.fromUser === true || m?.byUser === true) return true;
-  return false;
-}
-
 export default function TicketDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
   const [ticket, setTicket] = useState(null);
-  const [replyText, setReplyText] = useState("");
-  const [replySending, setReplySending] = useState(false);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
+  const inFlightRef = useRef({ seq: 0 });
+  const activeFetchCountRef = useRef(0);
+  const mountedRef = useRef(true);
+  const [messages, setMessages] = useState([]);
+  const resyncRef = useRef({ active: false, seq: 0 });
 
-  const load = async () => {
-    setLoading(true);
-    setError("");
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate("/tickets");
+    }
+  };
+
+  const load = async ({ initial = false, poll = false } = {}) => {
+    if (poll && activeFetchCountRef.current > 0) return;
+    const requestSeq = (inFlightRef.current.seq += 1);
+    activeFetchCountRef.current += 1;
+    if (initial) setLoading(true);
+    else setRefreshing(true);
     try {
-      const data = await ticketsBackend.getById(id);
-      setTicket(data || null);
+      const raw = await ticketsBackend.getById(id);
+      if (!mountedRef.current || requestSeq !== inFlightRef.current.seq) return;
+
+      const normalized = normalizeTicketResponse(raw);
+      const thread = normalizeTicketThread(normalized.threadSource);
+
+      setTicket(normalized.ticket || null);
+      setMessages((prev) =>
+        mergeMessages(initial ? [] : prev, thread, {
+          ticketId: id,
+          surface: "user-detail",
+          reason: initial ? "load-initial" : "load-poll",
+        }),
+      );
+      setLastUpdatedAt(Date.now());
+      setError("");
     } catch (e) {
-      setTicket(null);
+      if (!mountedRef.current || requestSeq !== inFlightRef.current.seq) return;
+      if (initial) setTicket(null);
       setError(e?.message || "Failed to load ticket details.");
     } finally {
+      activeFetchCountRef.current = Math.max(0, activeFetchCountRef.current - 1);
+      if (!mountedRef.current || requestSeq !== inFlightRef.current.seq) {
+        return;
+      }
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
   useEffect(() => {
     if (!id) return;
-    void load();
+    void load({ initial: true });
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return undefined;
+    let intervalId = null;
+    const clear = () => {
+      if (intervalId != null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+    const tick = () => {
+      if (document.visibilityState === "visible") {
+        void load({ initial: false, poll: true });
+      }
+    };
+    const start = () => {
+      clear();
+      if (document.visibilityState !== "visible") return;
+      intervalId = window.setInterval(tick, TICKET_DETAIL_POLL_MS);
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") clear();
+      else start();
+    };
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      clear();
+      document.removeEventListener("visibilitychange", onVis);
+    };
   }, [id]);
 
   const title = useMemo(() => {
@@ -63,18 +131,18 @@ export default function TicketDetail() {
     );
   }, [ticket, id]);
 
-  const status = safeStr(ticket?.status) || "OPEN";
+  const status = normalizeTicketStatus(ticket?.status);
+  const statusLabel = getTicketStatusLabel(status);
   const createdAt = ticket?.createdAt
     ? new Date(ticket.createdAt).toLocaleString()
     : "";
+  const resolved = normalizeTicketStatus(status) === "RESOLVED";
 
-  const messages = useMemo(() => normalizeMessages(ticket), [ticket]);
-
-  const handleSendReply = async (e) => {
-    e.preventDefault();
-    const text = replyText.trim();
-    if (!text || !id) return;
-    setReplySending(true);
+  const handleSendReply = async (text) => {
+    if (!id || !text.trim()) return;
+    if (resyncRef.current.active) return;
+    const seq = (resyncRef.current.seq += 1);
+    resyncRef.current.active = true;
     try {
       await ticketsBackend.reply({
         ticketId: id,
@@ -82,13 +150,18 @@ export default function TicketDetail() {
         message: text,
         body: text,
       });
-      setReplyText("");
       showSuccess("Reply sent");
-      await load();
+      // Safe refetch; merge prevents duplicates.
+      await load({ initial: false });
     } catch (err) {
       showError(err?.message || "Could not send reply");
+      // Resync anyway in case backend accepted but UI missed.
+      await load({ initial: false });
     } finally {
-      setReplySending(false);
+      // Only clear if still the latest send attempt.
+      if (seq === resyncRef.current.seq) {
+        resyncRef.current.active = false;
+      }
     }
   };
 
@@ -101,18 +174,18 @@ export default function TicketDetail() {
   };
 
   const statusTone =
-    String(status).toUpperCase() === "CLOSED" || String(status).toUpperCase() === "RESOLVED"
+    normalizeTicketStatus(status) === "RESOLVED"
       ? "#15803d"
-      : String(status).toUpperCase() === "OPEN"
-        ? "#1d4ed8"
-        : "#92400e";
+      : normalizeTicketStatus(status) === "PENDING"
+        ? "#92400e"
+        : "#1d4ed8";
 
   return (
     <div style={{ maxWidth: 980, margin: "0 auto", padding: 4 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
         <button
           type="button"
-          onClick={() => navigate("/support/chat")}
+          onClick={handleBack}
           style={{
             border: "1px solid rgba(148,163,184,0.5)",
             background: "#fff",
@@ -122,7 +195,7 @@ export default function TicketDetail() {
             fontWeight: 900,
           }}
         >
-          ← Tickets
+          ← Back to Tickets
         </button>
         <Link to="/support/ticket" style={{ color: "#2563eb", fontWeight: 900 }}>
           Raise a new ticket
@@ -174,7 +247,7 @@ export default function TicketDetail() {
                   color: statusTone,
                 }}
               >
-                {String(status).toUpperCase().replace(/_/g, " ")}
+                {statusLabel}
               </span>
             </div>
 
@@ -193,115 +266,32 @@ export default function TicketDetail() {
                 {safeStr(ticket?.description || ticket?.message)}
               </div>
             ) : null}
-
-            <div style={{ fontWeight: 950, marginBottom: 10, color: "#0f172a" }}>Conversation</div>
-
-            <div
-              style={{
-                display: "grid",
-                gap: 10,
-                marginBottom: 14,
-                maxHeight: 420,
-                overflowY: "auto",
-                paddingRight: 4,
-              }}
-            >
-              {messages.length === 0 ? (
-                <div style={{ color: "#64748b", padding: 12, borderRadius: 14 }}>
-                  No replies yet. Send a message below.
-                </div>
-              ) : (
-                messages.map((m, idx) => {
-                  const userSide = isUserMessage(m);
-                  const who = safeStr(m?.author || m?.from || m?.sender || m?.role) || (userSide ? "You" : "Support");
-                  const text = safeStr(m?.message || m?.text || m?.body) || "";
-                  const at = m?.createdAt || m?.time || m?.sentAt;
-                  const time = at ? new Date(at).toLocaleString() : "";
-                  return (
-                    <div
-                      key={`${idx}-${who}`}
-                      style={{
-                        display: "flex",
-                        justifyContent: userSide ? "flex-end" : "flex-start",
-                      }}
-                    >
-                      <div
-                        style={{
-                          maxWidth: "min(92%, 520px)",
-                          borderRadius: 14,
-                          padding: "10px 12px",
-                          background: userSide ? "linear-gradient(135deg, #2563eb, #1d4ed8)" : "#f1f5f9",
-                          color: userSide ? "#fff" : "#0f172a",
-                          border: userSide ? "none" : "1px solid rgba(148,163,184,0.25)",
-                          boxShadow: userSide ? "0 4px 14px rgba(37,99,235,0.25)" : "none",
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "space-between",
-                            gap: 12,
-                            marginBottom: 6,
-                            opacity: 0.92,
-                          }}
-                        >
-                          <div style={{ fontWeight: 950, fontSize: 12 }}>{who}</div>
-                          <div style={{ fontSize: 10, fontWeight: 700, opacity: 0.85 }}>{time}</div>
-                        </div>
-                        <div style={{ fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{text}</div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+            <TicketConversation
+              title="Conversation"
+              meta={`Ticket #${safeStr(ticket?.id) || safeStr(id)}`}
+              status={status}
+              messages={messages}
+              viewerIsAdmin={false}
+              canReply={!resolved}
+              resolvedNotice={resolved}
+              rightLabel="You"
+              leftLabel="Support"
+              onSend={handleSendReply}
+            />
+            <div style={{ marginTop: 10, color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+              {refreshing ? "Checking for updates…" : lastUpdatedAt ? "Updated just now" : ""}
             </div>
+          </div>
+        ) : null}
 
-            <form
-              onSubmit={handleSendReply}
-              style={{
-                border: "1px solid rgba(37,99,235,0.15)",
-                borderRadius: 14,
-                padding: 12,
-                background: "linear-gradient(180deg, rgba(239,246,255,0.65), #fff)",
-              }}
-            >
-              <div style={{ fontWeight: 950, marginBottom: 8, color: "#0f172a", fontSize: 13 }}>
-                Reply
-              </div>
-              <textarea
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                rows={4}
-                placeholder="Write a message…"
-                style={{
-                  width: "100%",
-                  resize: "vertical",
-                  borderRadius: 12,
-                  border: "1px solid rgba(148,163,184,0.35)",
-                  padding: 10,
-                  fontFamily: "inherit",
-                  fontSize: 13,
-                  marginBottom: 10,
-                }}
-              />
-              <button
-                type="submit"
-                disabled={replySending || !replyText.trim()}
-                style={{
-                  padding: "10px 16px",
-                  borderRadius: 12,
-                  border: "none",
-                  fontWeight: 900,
-                  cursor: replySending ? "wait" : "pointer",
-                  background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-                  color: "#fff",
-                  opacity: replyText.trim() ? 1 : 0.55,
-                }}
-              >
-                {replySending ? "Sending…" : "Send"}
-              </button>
-            </form>
+        {/* Premium skeleton for first load without layout jump */}
+        {loading ? (
+          <div style={{ padding: 16 }}>
+            <div className="s-skeleton s-line s-w-60 s-h-18" />
+            <div style={{ height: 10 }} />
+            <div className="s-skeleton s-line s-w-85" />
+            <div style={{ height: 8 }} />
+            <div className="s-skeleton s-line s-w-40" />
           </div>
         ) : null}
       </div>

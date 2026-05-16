@@ -24,6 +24,10 @@ export const endpoints = {
     ticketReply: (id) => `/admin/tickets/${id}/reply`,
     activity: "/admin/activity",
   },
+  /**
+   * Legacy axios paths — prefer `applicationBackend` + `backendJson`:
+   * GET `/application/list`, GET `/application/my`.
+   */
   apps: {
     all: "/apps",
     myApps: "/apps/my",

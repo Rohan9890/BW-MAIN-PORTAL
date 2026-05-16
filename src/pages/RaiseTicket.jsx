@@ -12,6 +12,14 @@ export default function RaiseTicket() {
   const [form, setForm] = useState({ subject: "", message: "" });
   const [fieldErrors, setFieldErrors] = useState({});
 
+  const handleBack = () => {
+    if (window.history.length > 1) {
+      navigate(-1);
+    } else {
+      navigate("/support/chat");
+    }
+  };
+
   const canSubmit = useMemo(() => {
     if (loading) return false;
     if (String(form.subject || "").trim().length < 4) return false;
@@ -33,10 +41,14 @@ export default function RaiseTicket() {
     setLoading(true);
     try {
       // Send the backend-likely contract, plus compatibility keys.
-      const payload = { subject, message, title: subject, description: message };
-      if (import.meta?.env?.DEV) {
-        console.info("[RaiseTicket] POST /tickets/create payload", payload);
-      }
+      const payload = {
+        subject,
+        message,
+        title: subject,
+        description: message,
+        // Compatibility: some backends require explicit status on creation to be visible in admin filters.
+        status: "OPEN",
+      };
       const res = await ticketsBackend.create(payload);
       const createdId = res?.id || res?.ticketId || res?.ticket?.id;
       invalidateDashboardData("ticket-created");
@@ -68,7 +80,7 @@ export default function RaiseTicket() {
         </div>
         <button
           type="button"
-          onClick={() => navigate("/support/chat")}
+          onClick={handleBack}
           className="support-action"
           style={{
             border: "1px solid rgba(148,163,184,0.5)",
@@ -80,107 +92,117 @@ export default function RaiseTicket() {
             height: 42,
           }}
         >
-          ← My tickets
+          ← Back to My tickets
         </button>
       </div>
 
-      <div
-        className="support-card"
-        style={{
-          marginTop: 14,
-          background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
-          borderRadius: 16,
-          padding: 18,
-          border: "1px solid rgba(37,99,235,0.12)",
-          boxShadow: "0 10px 26px rgba(15,23,42,0.08)",
-        }}
-      >
-        {error ? (
-          <div
-            style={{
-              marginBottom: 14,
-              padding: "12px 14px",
-              borderRadius: 12,
-              background: "#fff1f2",
-              border: "1px solid #fecaca",
-              color: "#b91c1c",
-              fontSize: 13,
-              fontWeight: 800,
-            }}
-          >
-            {error}
-          </div>
-        ) : null}
-
-        <div className="support-divider" />
-
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void submit();
+      <div className="ticket-raise-shell" style={{ marginTop: 14 }}>
+        <div
+          className="support-card"
+          style={{
+            marginTop: 0,
+            background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
+            borderRadius: 16,
+            padding: 18,
+            border: "1px solid rgba(37,99,235,0.12)",
+            boxShadow: "0 10px 26px rgba(15,23,42,0.08)",
           }}
-          style={{ display: "grid", gap: 12 }}
         >
-          <div>
-            <label style={labelStyle} htmlFor="ticket-title">
-              Subject
-            </label>
-            <input
-              id="ticket-title"
-              value={form.subject}
-              onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}
-              placeholder="e.g. Payment failed but amount debited"
-              className="support-input"
-              style={inputStyle(Boolean(fieldErrors.subject))}
-              disabled={loading}
-            />
-            {fieldErrors.subject ? (
-              <div style={fieldErrorStyle}>{fieldErrors.subject}</div>
-            ) : null}
-          </div>
-
-          <div>
-            <label style={labelStyle} htmlFor="ticket-desc">
-              Message
-            </label>
-            <textarea
-              id="ticket-desc"
-              value={form.message}
-              onChange={(e) => setForm((p) => ({ ...p, message: e.target.value }))}
-              placeholder="Include steps, error messages, and any relevant details."
-              className="support-textarea"
+          {error ? (
+            <div
               style={{
-                ...inputStyle(Boolean(fieldErrors.message)),
-                minHeight: 140,
-                resize: "vertical",
-                lineHeight: 1.5,
+                marginBottom: 14,
+                padding: "12px 14px",
+                borderRadius: 12,
+                background: "#fff1f2",
+                border: "1px solid #fecaca",
+                color: "#b91c1c",
+                fontSize: 13,
+                fontWeight: 800,
               }}
-              disabled={loading}
-            />
-            {fieldErrors.message ? (
-              <div style={fieldErrorStyle}>{fieldErrors.message}</div>
-            ) : null}
-          </div>
+            >
+              {error}
+            </div>
+          ) : null}
 
-          <button
-            type="submit"
-            disabled={!canSubmit}
-            className="support-btn"
-            style={{
-              border: "none",
-              borderRadius: 14,
-              padding: "12px 14px",
-              fontWeight: 950,
-              cursor: loading ? "not-allowed" : "pointer",
-              background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-              color: "#fff",
-              boxShadow: "0 14px 34px rgba(37,99,235,0.24)",
-              opacity: canSubmit ? 1 : 0.6,
+          <div className="support-divider" />
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submit();
             }}
+            style={{ display: "grid", gap: 12 }}
           >
-            {loading ? "Submitting..." : "Submit ticket"}
-          </button>
-        </form>
+            <div>
+              <label style={labelStyle} htmlFor="ticket-title">
+                Subject
+              </label>
+              <input
+                id="ticket-title"
+                value={form.subject}
+                onChange={(e) => setForm((p) => ({ ...p, subject: e.target.value }))}
+                placeholder="e.g. Payment failed but amount debited"
+                className="support-input"
+                style={inputStyle(Boolean(fieldErrors.subject))}
+                disabled={loading}
+              />
+              {fieldErrors.subject ? (
+                <div style={fieldErrorStyle}>{fieldErrors.subject}</div>
+              ) : null}
+            </div>
+
+            <div>
+              <label style={labelStyle} htmlFor="ticket-desc">
+                Message
+              </label>
+              <textarea
+                id="ticket-desc"
+                value={form.message}
+                onChange={(e) => setForm((p) => ({ ...p, message: e.target.value }))}
+                placeholder="Include steps, error messages, and any relevant details."
+                className="support-textarea"
+                style={{
+                  ...inputStyle(Boolean(fieldErrors.message)),
+                  minHeight: 160,
+                  resize: "vertical",
+                  lineHeight: 1.55,
+                }}
+                disabled={loading}
+              />
+              {fieldErrors.message ? (
+                <div style={fieldErrorStyle}>{fieldErrors.message}</div>
+              ) : null}
+            </div>
+
+            <button
+              type="submit"
+              disabled={!canSubmit}
+              className="support-btn"
+              style={{
+                border: "none",
+                borderRadius: 14,
+                padding: "12px 14px",
+                fontWeight: 950,
+                cursor: loading ? "not-allowed" : "pointer",
+                background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
+                color: "#fff",
+                boxShadow: "0 14px 34px rgba(37,99,235,0.24)",
+                opacity: canSubmit ? 1 : 0.6,
+              }}
+            >
+              {loading ? "Submitting..." : "Submit ticket"}
+            </button>
+          </form>
+        </div>
+
+        <aside className="ticket-help-card">
+          <h4>Tips to get a faster reply</h4>
+          <p>Include what you were trying to do, what happened, and any error text you saw.</p>
+          <span className="ticket-help-pill">What you expected vs what happened</span>
+          <span className="ticket-help-pill">Steps to reproduce (if possible)</span>
+          <span className="ticket-help-pill">Screenshots (if available)</span>
+        </aside>
       </div>
     </div>
   );

@@ -1,7 +1,7 @@
+import { Suspense, lazy } from "react";
 import { Navigate, Routes, Route } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
 
-import DashboardLayout from "./Layouts/DashboardLayout";
 import Home from "./pages/Home";
 import AllApps from "./pages/AllApps";
 import MyApps from "./pages/MyApps";
@@ -11,19 +11,31 @@ import Settings from "./pages/Settings";
 import Login from "./pages/Login";
 import ForgotPassword from "./pages/ForgotPassword";
 import Activity from "./pages/Activity";
-import AdminDashboard from "./pages/AdminDashboard";
-import UserDashboard from "./pages/UserDashboard";
-import TicketCenter from "./pages/TicketCenter";
-import RaiseTicket from "./pages/RaiseTicket";
-import TicketDetail from "./pages/TicketDetail";
 import Registration from "./pages/Registration";
+import VerifyEmail from "./pages/VerifyEmail";
 import PlansPricing from "./pages/PlansPricing";
 import MakePayment from "./pages/MakePayment";
 
-// ✅ FIX HERE (lowercase file name)
-import AdminKyc from "./pages/adminKyc";
 import ProtectedRoute from "./components/ProtectedRoute";
 import ErrorBoundary from "./components/ErrorBoundary";
+
+const DashboardLayout = lazy(() => import("./Layouts/DashboardLayout"));
+const AdminDashboard = lazy(() => import("./pages/AdminDashboard"));
+// Admin KYC is now handled inside AdminDashboard via real backend APIs.
+
+const UserDashboard = lazy(() => import("./pages/UserDashboard"));
+
+const TicketCenter = lazy(() => import("./pages/TicketCenter"));
+const RaiseTicket = lazy(() => import("./pages/RaiseTicket"));
+const TicketDetail = lazy(() => import("./pages/TicketDetail"));
+
+function RouteLoader({ label }) {
+  return (
+    <div style={{ padding: 16, textAlign: "center", color: "#64748b", fontWeight: 700 }}>
+      {label || "Loading..."}
+    </div>
+  );
+}
 
 export default function App() {
   return (
@@ -41,44 +53,53 @@ export default function App() {
       <ErrorBoundary>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
           <Route path="/register" element={<Registration />} />
           <Route path="/register/organization" element={<Registration />} />
 
-        <Route path="/plans" element={<PlansPricing />} />
-        <Route path="/payment" element={<MakePayment />} />
+          <Route path="/plans" element={<PlansPricing />} />
+          <Route path="/payment" element={<MakePayment />} />
 
-        <Route
-          path="/admin/*"
-          element={
-            <ProtectedRoute>
-              <AdminDashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin/kyc"
-          element={
-            <ProtectedRoute>
-              <AdminKyc />
-            </ProtectedRoute>
-          }
-        />
+          <Route
+            path="/admin/*"
+            element={
+              <ProtectedRoute requiredRole="ROLE_ADMIN">
+                <Suspense fallback={<RouteLoader label="Loading admin dashboard..." />}>
+                  <AdminDashboard />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/kyc"
+            element={
+              <ProtectedRoute requiredRole="ROLE_ADMIN">
+                <Suspense fallback={<RouteLoader label="Loading KYC..." />}>
+                  <AdminDashboard />
+                </Suspense>
+              </ProtectedRoute>
+            }
+          />
 
           {/* Legacy alias kept for compatibility */}
           <Route
             path="/user-dashboard"
             element={
-              <ProtectedRoute>
-                <UserDashboard />
+              <ProtectedRoute requiredRole="ROLE_USER">
+                <Suspense fallback={<RouteLoader label="Loading dashboard..." />}>
+                  <UserDashboard />
+                </Suspense>
               </ProtectedRoute>
             }
           />
         <Route
           path="/dashboard"
           element={
-            <ProtectedRoute>
-              <UserDashboard />
+            <ProtectedRoute requiredRole="ROLE_USER">
+              <Suspense fallback={<RouteLoader label="Loading dashboard..." />}>
+                <UserDashboard />
+              </Suspense>
             </ProtectedRoute>
           }
         />
@@ -86,24 +107,51 @@ export default function App() {
         <Route
           path="/support/chat"
           element={
-            <ProtectedRoute>
-              <TicketCenter />
+            <ProtectedRoute requiredRole="ROLE_USER">
+              <Suspense fallback={<RouteLoader label="Loading tickets..." />}>
+                <TicketCenter />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        {/* New production-friendly ticket URLs (preferred). Keep legacy /support/* aliases above. */}
+        <Route
+          path="/tickets"
+          element={
+            <ProtectedRoute requiredRole="ROLE_USER">
+              <Suspense fallback={<RouteLoader label="Loading tickets..." />}>
+                <TicketCenter />
+              </Suspense>
             </ProtectedRoute>
           }
         />
         <Route
           path="/support/ticket"
           element={
-            <ProtectedRoute>
-              <RaiseTicket />
+            <ProtectedRoute requiredRole="ROLE_USER">
+              <Suspense fallback={<RouteLoader label="Loading ticket form..." />}>
+                <RaiseTicket />
+              </Suspense>
             </ProtectedRoute>
           }
         />
         <Route
           path="/support/ticket/:id"
           element={
-            <ProtectedRoute>
-              <TicketDetail />
+            <ProtectedRoute requiredRole="ROLE_USER">
+              <Suspense fallback={<RouteLoader label="Loading ticket details..." />}>
+                <TicketDetail />
+              </Suspense>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/tickets/:id"
+          element={
+            <ProtectedRoute requiredRole="ROLE_USER">
+              <Suspense fallback={<RouteLoader label="Loading ticket details..." />}>
+                <TicketDetail />
+              </Suspense>
             </ProtectedRoute>
           }
         />
@@ -112,8 +160,10 @@ export default function App() {
 
           <Route
             element={
-              <ProtectedRoute>
-                <DashboardLayout />
+              <ProtectedRoute requiredRole="ROLE_USER">
+                <Suspense fallback={<RouteLoader label="Loading..." />}>
+                  <DashboardLayout />
+                </Suspense>
               </ProtectedRoute>
             }
           >

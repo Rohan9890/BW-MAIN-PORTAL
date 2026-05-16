@@ -6,9 +6,11 @@ import { getApiOrigin } from "../services/apiConfig";
 import { invalidateDashboardData } from "../services/dashboardInvalidate";
 import { showError, showSuccess } from "../services/toast";
 import { maskDocumentNumber, safeUpper } from "../utils/mask";
+import { canonicalizeKycStatus, KYC_CANONICAL, kycCanonicalLabel } from "../utils/kycAdmin";
 import "./Profile.css";
 
 const CONTACT_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const KYC_POLL_MS = 60_000;
 
 /** Normalize & validate new email or phone for OTP contact update */
 function validateContactUpdateInput(kind, raw) {
@@ -36,6 +38,7 @@ export default function Profile() {
   const [draftErrors, setDraftErrors] = useState({});
   const fileRef = useRef(null);
   const kycFileRef = useRef(null);
+  const kycPollTickInFlightRef = useRef(false);
   const [photoFile, setPhotoFile] = useState(null);
   const [photoPreview, setPhotoPreview] = useState("");
   const [photoUploading, setPhotoUploading] = useState(false);
@@ -200,6 +203,52 @@ export default function Profile() {
     }
   };
 
+  // Lightweight KYC status refresh (visible-only) so admin verify/reject reflects on user side.
+  useEffect(() => {
+    if (!authToken) return undefined;
+    let intervalId = null;
+    let cancelled = false;
+    const clear = () => {
+      if (intervalId != null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+    const tick = async () => {
+      if (document.visibilityState !== "visible") return;
+      if (kycPollTickInFlightRef.current) return;
+      kycPollTickInFlightRef.current = true;
+      try {
+        const kycRes = await kycBackend.me();
+        if (cancelled) return;
+        setKyc(kycRes || null);
+        setKycError("");
+      } catch (e) {
+        if (cancelled) return;
+        // Keep current UI; only surface if we never loaded KYC before.
+        setKycError((prev) => prev || (e?.message || "Unable to load KYC details."));
+      } finally {
+        kycPollTickInFlightRef.current = false;
+      }
+    };
+    const start = () => {
+      clear();
+      if (document.visibilityState !== "visible") return;
+      intervalId = window.setInterval(() => void tick(), KYC_POLL_MS);
+    };
+    const onVis = () => {
+      if (document.visibilityState === "hidden") clear();
+      else start();
+    };
+    start();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      cancelled = true;
+      clear();
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [authToken]);
+
   const photoUrl = useMemo(() => {
     const raw =
       String(profile?.photoUrl || profile?.photoPath || profile?.photo || "").trim();
@@ -214,20 +263,23 @@ export default function Profile() {
   const kycStatusRaw = safeUpper(
     kyc?.status || kycNested?.status || profile?.kycStatus || "",
   );
+  const kycCanon = canonicalizeKycStatus(kycStatusRaw);
   const kycStatus = (() => {
-    if (kycStatusRaw === "APPROVED") return "APPROVED";
+    if (kycCanon === KYC_CANONICAL.VERIFIED) return "APPROVED";
+    if (kycCanon === KYC_CANONICAL.REJECTED) return "REJECTED";
+    if (kycCanon === KYC_CANONICAL.REUPLOAD_REQUIRED) return "REUPLOAD_REQUIRED";
+    if (kycCanon === KYC_CANONICAL.UNDER_REVIEW) return "UNDER_REVIEW";
     if (kycStatusRaw === "PENDING") return "PENDING";
-    if (kycStatusRaw === "REJECTED") return "REJECTED";
-    // Only treat "isKycVerified" as meaningful when backend status is approved.
-    // Never show verified just because documents were uploaded.
-    if (Boolean(profile?.isKycVerified) && kycStatusRaw === "APPROVED") return "APPROVED";
     return "PENDING";
   })();
 
   const kycBadge = (() => {
-    if (kycStatus === "APPROVED") return { label: "KYC Approved", tone: "success" };
-    if (kycStatus === "REJECTED") return { label: "KYC Rejected", tone: "danger" };
-    return { label: "KYC Pending", tone: "warning" };
+    const label = kycCanonicalLabel(kycCanon);
+    if (kycCanon === KYC_CANONICAL.VERIFIED) return { label, tone: "success" };
+    if (kycCanon === KYC_CANONICAL.REJECTED) return { label, tone: "danger" };
+    if (kycCanon === KYC_CANONICAL.REUPLOAD_REQUIRED) return { label, tone: "warning" };
+    if (kycCanon === KYC_CANONICAL.UNDER_REVIEW) return { label, tone: "neutral" };
+    return { label, tone: "warning" };
   })();
 
   const accountBadge = accountVerified
@@ -326,6 +378,7 @@ export default function Profile() {
       showSuccess("KYC document uploaded");
       if (kycFileRef.current) kycFileRef.current.value = "";
       await fetchProfile();
+      invalidateDashboardData("kyc-upload");
     } catch (e) {
       showError(e?.message || "KYC upload failed");
     } finally {
@@ -339,6 +392,7 @@ export default function Profile() {
       await kycBackend.resubmit({});
       showSuccess("KYC resubmitted for review");
       await fetchProfile();
+      invalidateDashboardData("kyc-resubmit");
     } catch (e) {
       showError(e?.message || "Could not resubmit KYC");
     } finally {
@@ -705,12 +759,14 @@ export default function Profile() {
               <div className="pf-card-body">
                 {kycError ? <div className="pf-inline-error">{kycError}</div> : null}
 
-                {kycStatus === "REJECTED" && rejectionReason ? (
+                {(kycStatus === "REJECTED" || kycStatus === "REUPLOAD_REQUIRED") && rejectionReason ? (
                   <div
                     className="pf-inline-error"
                     style={{ marginBottom: 12, borderRadius: 12, padding: "12px 14px" }}
                   >
-                    <strong style={{ display: "block", marginBottom: 6 }}>Rejection reason</strong>
+                    <strong style={{ display: "block", marginBottom: 6 }}>
+                      {kycStatus === "REUPLOAD_REQUIRED" ? "Instructions" : "Rejection reason"}
+                    </strong>
                     {rejectionReason}
                   </div>
                 ) : null}
@@ -733,7 +789,9 @@ export default function Profile() {
                       >
                         {kycUploading ? "Uploading…" : "Upload to KYC"}
                       </button>
-                      {(kycStatus === "REJECTED" || kycStatus === "PENDING") && (
+                      {(kycStatus === "REJECTED" ||
+                        kycStatus === "PENDING" ||
+                        kycStatus === "REUPLOAD_REQUIRED") && (
                         <button
                           type="button"
                           className="pf-btn pf-btn--ghost"
@@ -778,7 +836,11 @@ export default function Profile() {
 
                       <div
                         className={`pf-step ${
-                          kycStatus === "PENDING" || kycStatus === "APPROVED" || kycStatus === "REJECTED"
+                          kycStatus === "PENDING" ||
+                          kycStatus === "UNDER_REVIEW" ||
+                          kycStatus === "APPROVED" ||
+                          kycStatus === "REJECTED" ||
+                          kycStatus === "REUPLOAD_REQUIRED"
                             ? "pf-step--done"
                             : ""
                         }`}
@@ -796,16 +858,30 @@ export default function Profile() {
                             ? "pf-step--done pf-step--success"
                             : kycStatus === "REJECTED"
                               ? "pf-step--done pf-step--danger"
-                              : ""
+                              : kycStatus === "REUPLOAD_REQUIRED"
+                                ? "pf-step--done pf-step--danger"
+                                : ""
                         }`}
                       >
                         <div className="pf-step-dot" />
                         <div className="pf-step-text">
-                          <div className="pf-step-title">{kycStatus === "REJECTED" ? "Rejected" : "Approved"}</div>
+                          <div className="pf-step-title">
+                            {kycStatus === "REJECTED"
+                              ? "Rejected"
+                              : kycStatus === "REUPLOAD_REQUIRED"
+                                ? "Re-upload required"
+                                : kycStatus === "APPROVED"
+                                  ? "Approved"
+                                  : "Decision"}
+                          </div>
                           <div className="pf-step-sub">
                             {kycStatus === "REJECTED"
                               ? "Your KYC was rejected. Please re-submit."
-                              : "Your KYC is approved."}
+                              : kycStatus === "REUPLOAD_REQUIRED"
+                                ? "Please upload clearer documents as requested."
+                                : kycStatus === "APPROVED"
+                                  ? "Your KYC is approved."
+                                  : "Awaiting a decision on your submission."}
                           </div>
                         </div>
                       </div>
@@ -817,13 +893,13 @@ export default function Profile() {
                           View / Download
                         </a>
                       ) : null}
-                      {safeUpper(kyc?.status) === "PENDING" ? (
+                      {safeUpper(kyc?.status) === "PENDING" || kycStatus === "UNDER_REVIEW" ? (
                         <button
                           type="button"
                           className="pf-btn pf-btn--primary"
                           onClick={() => showSuccess("KYC is pending review")}
                         >
-                          KYC Pending
+                          {kycStatus === "UNDER_REVIEW" ? "Under review" : "KYC Pending"}
                         </button>
                       ) : null}
                     </div>

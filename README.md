@@ -15,15 +15,15 @@ Open [http://localhost:5173](http://localhost:5173).
 
 ## Routes
 
-| Path | Page |
-|------|------|
-| `/` or `/login` | Login |
-| `/register` | Individual Registration |
+| Path                     | Page                      |
+| ------------------------ | ------------------------- |
+| `/` or `/login`          | Login                     |
+| `/register`              | Individual Registration   |
 | `/register/organization` | Organization Registration |
-| `/plans` | Plans & Pricing |
-| `/payment` | Make Payment |
-| `/dashboard` | User Dashboard |
-| `/admin` | Admin Dashboard |
+| `/plans`                 | Plans & Pricing           |
+| `/payment`               | Make Payment              |
+| `/dashboard`             | User Dashboard            |
+| `/admin`                 | Admin Dashboard           |
 
 ## Build
 

@@ -2,15 +2,17 @@ import { useEffect, useMemo, useState } from "react";
 import { adminApi } from "../services";
 import { mockData } from "../services/mockData";
 import { showSuccess, showError } from "../services/toast";
+import { USE_MOCK_API } from "../services/serviceUtils";
 
 // ── Default fallbacks sourced from centralised mock data ──────────────────────
-const DEFAULT_STATS = mockData.admin.stats;
-const DEFAULT_APPS = mockData.admin.apps;
-const DEFAULT_PAYMENTS = mockData.admin.payments;
-const DEFAULT_TICKETS = mockData.admin.tickets;
-const DEFAULT_ACTIVITY_FEED = mockData.admin.activityFeed;
-const DEFAULT_USER_GROWTH = mockData.admin.userGrowth;
-const DEFAULT_USERS = mockData.admin.users;
+// IMPORTANT: Only seed demo data when explicit mock mode is enabled.
+const DEFAULT_STATS = USE_MOCK_API ? mockData.admin.stats : [];
+const DEFAULT_APPS = USE_MOCK_API ? mockData.admin.apps : [];
+const DEFAULT_PAYMENTS = USE_MOCK_API ? mockData.admin.payments : [];
+const DEFAULT_TICKETS = USE_MOCK_API ? mockData.admin.tickets : [];
+const DEFAULT_ACTIVITY_FEED = USE_MOCK_API ? mockData.admin.activityFeed : [];
+const DEFAULT_USER_GROWTH = USE_MOCK_API ? mockData.admin.userGrowth : [];
+const DEFAULT_USERS = USE_MOCK_API ? mockData.admin.users : [];
 
 // ── Pure helper utilities ─────────────────────────────────────────────────────
 

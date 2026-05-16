@@ -5,6 +5,9 @@
 export const PUBLIC_AUTH_PATHS_LIST = [
   "/login",
   "/verify-otp",
+  "/verify-email",
+  "/admin/auth/login",
+  "/admin/auth/verify-otp",
   "/register",
   "/forgot-password",
   "/reset-password",
@@ -37,12 +40,23 @@ export function isPublicAuthPath(url) {
   return PUBLIC_AUTH_PATHS.has(normalizeAuthPath(url));
 }
 
+/**
+ * API paths where **401 must not** trigger global session teardown via `apiFetch` / axios.
+ * Used for optional features that may be misconfigured, role-gated, or absent on the server
+ * while core auth (`/profile`, etc.) still succeeds with the same JWT.
+ */
+export function isSessionSoft401Path(url) {
+  const p = normalizeAuthPath(url);
+  return p === "/notifications" || p.startsWith("/notifications/");
+}
+
 /** Any URL fragment that targets verify-otp (belt-and-suspenders for 401 / redirect rules). */
 export function urlIncludesVerifyOtp(url) {
   return String(url || "").toLowerCase().includes("verify-otp");
 }
 
-const AUTH_UI_PATH_RE = /^\/(login|forgot-password|reset-password)(\/|$)/i;
+const AUTH_UI_PATH_RE =
+  /^\/(login|forgot-password|reset-password|verify-email|register)(\/|$)/i;
 
 export function isAuthFlowAppPath(pathname) {
   return AUTH_UI_PATH_RE.test(String(pathname || ""));

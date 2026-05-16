@@ -7,6 +7,7 @@ import {
 import {
   isAuthFlowAppPath,
   isPublicAuthPath,
+  isSessionSoft401Path,
   normalizeAuthPath,
   urlIncludesVerifyOtp,
 } from "./authPaths";
@@ -110,6 +111,15 @@ export async function apiFetch(url, options = {}) {
     credentials: credentialsMode,
   });
 
+  if (import.meta.env.DEV && normalizeAuthPath(url) === "/admin/auth/login") {
+    // eslint-disable-next-line no-console
+    console.log(
+      "[apiFetch] /admin/auth/login HTTP status:",
+      res.status,
+      res.statusText,
+    );
+  }
+
   if (import.meta.env.DEV && isProfilePath && res.status === 401) {
     try {
       const errText = await res.clone().text();
@@ -148,6 +158,14 @@ export async function apiFetch(url, options = {}) {
 
     /** On login/forgot/reset pages, background calls (e.g. GET /profile) may 401 — do not hard-redirect away while debugging OTP. */
     if (typeof window !== "undefined" && isAuthFlowAppPath(window.location.pathname)) {
+      return res;
+    }
+
+    /**
+     * Optional endpoints (e.g. notifications) may 401 due to backend routing/roles while
+     * `/profile` still succeeds — return the response and let callers degrade; do not logout.
+     */
+    if (isSessionSoft401Path(url) || isSessionSoft401Path(requestUrl)) {
       return res;
     }
 

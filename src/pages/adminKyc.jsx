@@ -1,59 +1,106 @@
 import { useEffect, useState } from "react";
-import { buildApiRequestUrl, getApiOrigin } from "../services/apiConfig";
+import { useNavigate } from "react-router-dom";
+import { getApiOrigin } from "../services/apiConfig";
+import { backendJson } from "../services/backendClient";
+import { showError, showSuccess } from "../services/toast";
 
 export default function AdminKyc() {
+  const navigate = useNavigate();
   const [kycList, setKycList] = useState([]);
-  const token = localStorage.getItem("ui-access-token");
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState("pending"); // "pending" | "all"
   const uploadsOrigin = getApiOrigin() || window.location.origin;
 
   useEffect(() => {
-    fetchKyc();
-  }, []);
+    void fetchKyc(activeTab);
+  }, [activeTab]);
 
-  const fetchKyc = async () => {
+  const fetchKyc = async (tab) => {
+    setLoading(true);
     try {
-      const res = await fetch(buildApiRequestUrl("/kyc/pending"), {
-        credentials: "omit",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/json",
-        },
-      });
-
-      const data = await res.json();
-      setKycList(data.data || []);
+      const path = tab === "all" ? "/admin/kyc/all" : "/admin/kyc/pending";
+      const res = await backendJson(path, { method: "GET", suppressGlobalServerErrorToast: true });
+      const items = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      setKycList(items);
     } catch (err) {
-      console.error(err);
+      setKycList([]);
+      showError(err?.message || "Failed to load KYC requests");
+    } finally {
+      setLoading(false);
     }
   };
 
   const approve = async (id) => {
-    await fetch(buildApiRequestUrl(`/kyc/verify/${id}`), {
-      method: "PUT",
-      credentials: "omit",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-      },
-    });
-    fetchKyc();
+    try {
+      await backendJson(`/admin/kyc/verify/${encodeURIComponent(String(id))}`, {
+        method: "PUT",
+        suppressGlobalServerErrorToast: true,
+      });
+      showSuccess("KYC verified");
+      await fetchKyc(activeTab);
+    } catch (err) {
+      showError(err?.message || "Failed to verify KYC");
+    }
   };
 
   const reject = async (id) => {
-    await fetch(buildApiRequestUrl(`/kyc/reject/${id}`), {
-      method: "PUT",
-      credentials: "omit",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: "application/json",
-      },
-    });
-    fetchKyc();
+    const reason =
+      window.prompt("Rejection reason (optional)")?.trim() ?? "";
+    try {
+      await backendJson(`/admin/kyc/reject/${encodeURIComponent(String(id))}`, {
+        method: "PUT",
+        query: { reason },
+        suppressGlobalServerErrorToast: true,
+      });
+      showSuccess("KYC rejected");
+      await fetchKyc(activeTab);
+    } catch (err) {
+      showError(err?.message || "Failed to reject KYC");
+    }
   };
 
   return (
     <div style={{ padding: 20 }}>
-      <h2>KYC Admin Panel</h2>
+      <button
+        type="button"
+        onClick={() => {
+          if (window.history.length > 1) {
+            navigate(-1);
+          } else {
+            navigate("/admin");
+          }
+        }}
+        style={{
+          border: "1px solid rgba(148,163,184,0.5)",
+          background: "#fff",
+          borderRadius: 10,
+          padding: "6px 10px",
+          cursor: "pointer",
+          fontWeight: 800,
+          marginBottom: 10,
+        }}
+      >
+        ← Back
+      </button>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <h2 style={{ margin: 0 }}>KYC Admin Panel</h2>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={() => setActiveTab("pending")}
+            disabled={activeTab === "pending"}
+          >
+            Pending
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("all")}
+            disabled={activeTab === "all"}
+          >
+            All
+          </button>
+        </div>
+      </div>
 
       <table border="1" width="100%">
         <thead>
@@ -67,30 +114,52 @@ export default function AdminKyc() {
         </thead>
 
         <tbody>
-          {kycList.map((k) => (
-            <tr key={k.id}>
-              <td>{k.user?.userId}</td>
-              <td>{k.user?.entityName}</td>
-
-              <td>
-                <a
-                  href={`${uploadsOrigin}/uploads/${k.filePath}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  View
-                </a>
-              </td>
-
-              <td>{k.status}</td>
-
-              <td>
-                <button onClick={() => approve(k.user.userId)}>Approve</button>
-
-                <button onClick={() => reject(k.user.userId)}>Reject</button>
+          {loading ? (
+            <tr>
+              <td colSpan={5} style={{ textAlign: "center", padding: 12 }}>
+                Loading KYC requests...
               </td>
             </tr>
-          ))}
+          ) : !kycList.length ? (
+            <tr>
+              <td colSpan={5} style={{ textAlign: "center", padding: 12 }}>
+                No KYC requests found.
+              </td>
+            </tr>
+          ) : (
+            kycList.map((k) => (
+              <tr key={k.id ?? `${k.user?.userId ?? ""}-${k.filePath ?? ""}`}>
+                <td>{k.user?.userId ?? k.userId ?? "—"}</td>
+                <td>{k.user?.entityName ?? k.name ?? "—"}</td>
+
+                <td>
+                  {k.filePath ? (
+                    <a
+                      href={`${uploadsOrigin}/uploads/${k.filePath}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      View
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+
+                <td>{k.status ?? "—"}</td>
+
+                <td>
+                  <button onClick={() => approve(k.user?.userId ?? k.userId ?? k.id)}>
+                    Approve
+                  </button>
+
+                  <button onClick={() => reject(k.user?.userId ?? k.userId ?? k.id)}>
+                    Reject
+                  </button>
+                </td>
+              </tr>
+            ))
+          )}
         </tbody>
       </table>
     </div>

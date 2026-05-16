@@ -1,10 +1,54 @@
 import { apiFetch } from "./apiFetch";
 import { showError } from "./toast";
 
+const DEFAULT_TIMEOUT_MS = 15_000;
+
 function toError(message, extras = {}) {
   const err = new Error(message || "Something went wrong");
   Object.assign(err, extras);
   return err;
+}
+
+function buildQueryString(path, query) {
+  const normalizedPath = String(path || "").startsWith("/")
+    ? String(path || "")
+    : `/${String(path || "")}`;
+  if (!query || typeof query !== "object") return normalizedPath;
+
+  const params = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    params.set(key, String(value));
+  });
+
+  const qs = params.toString();
+  if (!qs) return normalizedPath;
+  return normalizedPath.includes("?")
+    ? `${normalizedPath}&${qs}`
+    : `${normalizedPath}?${qs}`;
+}
+
+function mergeAbortSignals(primary, secondary) {
+  if (
+    primary &&
+    secondary &&
+    typeof AbortSignal !== "undefined" &&
+    typeof AbortSignal.any === "function"
+  ) {
+    return AbortSignal.any([primary, secondary]);
+  }
+  return primary || secondary || undefined;
+}
+
+function withTimeout(signal, timeoutMs = DEFAULT_TIMEOUT_MS) {
+  const ms = Number(timeoutMs);
+  if (!Number.isFinite(ms) || ms <= 0) return { signal, cleanup: () => {} };
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), ms);
+  return {
+    signal: mergeAbortSignals(signal, controller.signal),
+    cleanup: () => clearTimeout(id),
+  };
 }
 
 /** Spring-style validation and generic API error text */
@@ -14,6 +58,19 @@ export function buildApiErrorMessage(payload, fallback) {
   if (typeof payload !== "object") return fallback;
   if (typeof payload.message === "string" && payload.message.trim()) {
     return payload.message.trim();
+  }
+  if (typeof payload.error === "string" && payload.error.trim()) {
+    return payload.error.trim();
+  }
+  const nested =
+    payload.data && typeof payload.data === "object" ? payload.data : null;
+  if (nested) {
+    if (typeof nested.message === "string" && nested.message.trim()) {
+      return nested.message.trim();
+    }
+    if (typeof nested.error === "string" && nested.error.trim()) {
+      return nested.error.trim();
+    }
   }
   if (Array.isArray(payload.errors)) {
     const parts = payload.errors
@@ -35,6 +92,14 @@ export function buildApiErrorMessage(payload, fallback) {
   return fallback;
 }
 
+/** Prefer structured `payload` from `backendJson` errors, then `Error.message`. */
+export function getApiErrorMessage(err, fallback = "Request failed") {
+  const fromPayload = buildApiErrorMessage(err?.payload, "");
+  if (fromPayload) return fromPayload;
+  if (typeof err?.message === "string" && err.message.trim()) return err.message.trim();
+  return fallback;
+}
+
 async function readJsonSafe(res) {
   const text = await res.text().catch(() => "");
   if (!text) return null;
@@ -47,7 +112,7 @@ async function readJsonSafe(res) {
 
 async function unwrapBackendEnvelope(res, unwrapOptions = {}) {
   const { suppressGlobalServerErrorToast } = unwrapOptions || {};
-  // apiFetch returns null on 401 and handles redirect/logout.
+  // apiFetch returns null on most 401s (global logout); optional paths return the Response instead.
   if (!res) throw toError("Session expired. Please login again.", { status: 401 });
 
   const payload = await readJsonSafe(res);
@@ -62,12 +127,14 @@ async function unwrapBackendEnvelope(res, unwrapOptions = {}) {
 
   if (!payload || typeof payload !== "object") return payload;
 
-  // Standard backend envelope: `{ status: number, data: ... }` — avoid treating unrelated
-  // body shapes (e.g. `{ token, message }`) as envelopes unless `data` is explicit.
-  const looksLikeEnvelope =
-    typeof payload.status === "number" &&
-    Object.prototype.hasOwnProperty.call(payload, "data");
-  if (looksLikeEnvelope) {
+  // Standard backend envelopes:
+  // - `{ status: number, data: ... }`
+  // - `{ success: boolean, data: ... }`
+  // Avoid treating unrelated body shapes (e.g. `{ token, message }`) as envelopes unless `data` is explicit.
+  const hasData = Object.prototype.hasOwnProperty.call(payload, "data");
+  const looksLikeStatusEnvelope = typeof payload.status === "number" && hasData;
+  const looksLikeSuccessEnvelope = typeof payload.success === "boolean" && hasData;
+  if (looksLikeStatusEnvelope || looksLikeSuccessEnvelope) {
     return payload.data;
   }
 
@@ -81,7 +148,14 @@ async function unwrapBackendEnvelope(res, unwrapOptions = {}) {
  * Returns `data` directly.
  */
 export async function backendJson(path, options = {}) {
-  const { json, suppressGlobalServerErrorToast, ...fetchOptions } = options || {};
+  const {
+    json,
+    suppressGlobalServerErrorToast,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    signal,
+    query,
+    ...fetchOptions
+  } = options || {};
   const requestOptions = json
     ? {
         ...fetchOptions,
@@ -90,8 +164,17 @@ export async function backendJson(path, options = {}) {
       }
     : fetchOptions;
 
-  const res = await apiFetch(path, requestOptions);
-  return unwrapBackendEnvelope(res, { suppressGlobalServerErrorToast });
+  const t = withTimeout(signal, timeoutMs);
+  try {
+    const finalPath = buildQueryString(path, query);
+    const res = await apiFetch(finalPath, { ...requestOptions, signal: t.signal });
+    return unwrapBackendEnvelope(res, { suppressGlobalServerErrorToast });
+  } catch (e) {
+    if (e instanceof Error) throw e;
+    throw toError(typeof e === "string" ? e : "Request failed");
+  } finally {
+    t.cleanup();
+  }
 }
 
 export async function backendPost(path, body) {
@@ -99,7 +182,14 @@ export async function backendPost(path, body) {
 }
 
 export async function backendBlob(path, options = {}) {
-  const res = await apiFetch(path, { ...(options || {}), method: options?.method || "GET" });
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal, query, ...rest } = options || {};
+  const t = withTimeout(signal, timeoutMs);
+  const finalPath = buildQueryString(path, query);
+  const res = await apiFetch(finalPath, {
+    ...(rest || {}),
+    method: options?.method || "GET",
+    signal: t.signal,
+  });
   if (!res) throw toError("Session expired. Please login again.", { status: 401 });
   if (!res.ok) {
     const payload = await readJsonSafe(res);
@@ -110,15 +200,36 @@ export async function backendBlob(path, options = {}) {
     }
     throw toError(message, { status: res.status, payload });
   }
-  return res.blob();
+  try {
+    return await res.blob();
+  } finally {
+    t.cleanup();
+  }
 }
 
 export async function backendMultipart(path, formData, options = {}) {
-  const res = await apiFetch(path, {
-    ...(options || {}),
-    method: options?.method || "POST",
-    body: formData,
-  });
-  return unwrapBackendEnvelope(res);
+  const {
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    signal,
+    query,
+    suppressGlobalServerErrorToast,
+    ...rest
+  } = options || {};
+  const t = withTimeout(signal, timeoutMs);
+  try {
+    const finalPath = buildQueryString(path, query);
+    const res = await apiFetch(finalPath, {
+      ...(rest || {}),
+      method: options?.method || "POST",
+      body: formData,
+      signal: t.signal,
+    });
+    return unwrapBackendEnvelope(res, { suppressGlobalServerErrorToast });
+  } catch (e) {
+    if (e instanceof Error) throw e;
+    throw toError(typeof e === "string" ? e : "Request failed");
+  } finally {
+    t.cleanup();
+  }
 }
 

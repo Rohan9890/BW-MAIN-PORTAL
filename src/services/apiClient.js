@@ -1,6 +1,11 @@
 import axios from "axios";
 import { getApiBaseRoot, logDevApiTransport } from "./apiConfig";
-import { isPublicAuthPath, isAuthFlowAppPath, urlIncludesVerifyOtp } from "./authPaths";
+import {
+  isPublicAuthPath,
+  isAuthFlowAppPath,
+  isSessionSoft401Path,
+  urlIncludesVerifyOtp,
+} from "./authPaths";
 
 // ── Constants ───────────────────────────────────────────────────────────────
 const TOKEN_KEY = "ui-access-token";
@@ -99,11 +104,14 @@ axiosInstance.interceptors.response.use(
     const status = error.response?.status ?? null;
 
     const combinedUrl = `${error.config?.baseURL || ""}${error.config?.url || ""}`;
+    const reqUrl = error.config?.url || "";
     const skip401Logout =
       urlIncludesVerifyOtp(combinedUrl) ||
-      urlIncludesVerifyOtp(error.config?.url || "") ||
-      isPublicAuthPath(error.config?.url || "") ||
+      urlIncludesVerifyOtp(reqUrl) ||
+      isPublicAuthPath(reqUrl) ||
       isPublicAuthPath(combinedUrl) ||
+      isSessionSoft401Path(reqUrl) ||
+      isSessionSoft401Path(combinedUrl) ||
       (typeof window !== "undefined" && isAuthFlowAppPath(window.location.pathname));
 
     /**

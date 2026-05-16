@@ -21,19 +21,22 @@ import {
   writeRecentAppsCache,
 } from "../services/recentAppsCache";
 import { getUsageTimeseriesCache } from "../services/usageTimeseriesCache";
-import { DASHBOARD_INVALIDATE_EVENT } from "../services/dashboardInvalidate";
+import { DASHBOARD_INVALIDATE_EVENT, invalidateDashboardData } from "../services/dashboardInvalidate";
 import {
   activityBackend,
   dashboardBackend,
   ticketsBackend,
+  applicationBackend,
 } from "../services/backendApis";
 import { withRetryOnce } from "../services/withRetryOnce";
-import { showSuccess } from "../services/toast";
+import { showSuccess, showError } from "../services/toast";
 import {
   normalizeUsageTimeseriesPayload,
   usageIntervalForRange,
 } from "../utils/usageTimeseries";
 import { recordDashboardUsageAppPick } from "../utils/usageAppSelectionAnalytics";
+import { openUserCatalogApp } from "../utils/appNavigation";
+import { canonicalizeKycStatus, kycCanonicalLabel, KYC_CANONICAL } from "../utils/kycAdmin";
 import "./UserDashboard.css";
 
 const AppUsageChart = lazy(() => import("./AppUsageChart"));
@@ -327,8 +330,15 @@ function normalizeRecentAppsPayload(body) {
       if (appId === undefined || appId === null) return null;
       const appName = String(row?.appName ?? row?.name ?? row?.title ?? "App").trim() || "App";
       const lastOpenedAt = row?.lastOpenedAt ?? row?.openedAt ?? row?.lastAccessAt ?? null;
-      const appUrl = String(row?.appUrl ?? row?.url ?? "").trim();
-      return { appId, appName, lastOpenedAt, appUrl };
+      const externalUrl = String(row?.externalUrl ?? "").trim();
+      const routePath = String(row?.routePath ?? row?.route ?? "").trim();
+      let appUrl = String(row?.appUrl ?? row?.url ?? "").trim();
+      if (!appUrl) {
+        if (externalUrl) appUrl = externalUrl;
+        else if (routePath) appUrl = routePath.startsWith("/") ? routePath : `/${routePath}`;
+      }
+      const status = row?.status ?? row?.appStatus ?? null;
+      return { appId, appName, lastOpenedAt, appUrl, externalUrl, routePath, status };
     })
     .filter(Boolean);
 }
@@ -354,6 +364,9 @@ function mapRecentAppToGridEntry(row, i) {
     name: row.appName,
     time: formatLastOpenedAt(row.lastOpenedAt),
     appUrl: row.appUrl,
+    externalUrl: row.externalUrl,
+    routePath: row.routePath,
+    status: row.status,
     iconBg: p.iconBg,
     iconColor: p.iconColor,
   };
@@ -976,7 +989,16 @@ export default function UserDashboard() {
   const totalTransactions = Number(summary?.totalTransactions ?? 0) || 0;
   const referralCount = Number(summary?.referralCount ?? 0) || 0;
   const totalSpent = Number(summary?.totalSpent ?? 0) || 0;
-  const kycStatus = String(summary?.kycStatus || "").toUpperCase() || "PENDING";
+  const kycDashboardCanon =
+    typeof canonicalizeKycStatus === "function"
+      ? canonicalizeKycStatus(summary?.kycStatus)
+      : KYC_CANONICAL?.PENDING ?? "PENDING";
+  const kycDashboardLabel =
+    typeof kycCanonicalLabel === "function"
+      ? kycCanonicalLabel(kycDashboardCanon)
+      : "Pending";
+  const kycDashboardVerified =
+    kycDashboardCanon === (KYC_CANONICAL && KYC_CANONICAL.VERIFIED);
   const ticketsKpiCount = useMemo(() => {
     if (ticketsListTotal === null || ticketsListTotal === undefined) {
       return null;
@@ -1961,14 +1983,27 @@ export default function UserDashboard() {
                         type="button"
                         className="ud-btn-open"
                         onClick={() => {
-                          const appUrl = app.appUrl;
-                          if (appUrl?.startsWith("http")) {
-                            window.open(appUrl, "_blank", "noopener,noreferrer");
-                          } else if (appUrl?.startsWith("/")) {
-                            navigate(appUrl);
-                          } else {
-                            navigate("/all-apps");
-                          }
+                          void openUserCatalogApp(
+                            {
+                              appId: app.appId,
+                              status: app.status,
+                              externalUrl: app.externalUrl,
+                              routePath: app.routePath,
+                              appUrl: app.appUrl,
+                            },
+                            {
+                              navigate,
+                              applicationBackend,
+                              onAfterOpen: () =>
+                                invalidateDashboardData("application-opened"),
+                            },
+                          ).then((r) => {
+                            if (!r.ok && r.reason === "unpublished") {
+                              showError("This app is not available.");
+                            } else if (!r.ok && r.reason === "no-target") {
+                              showError("No link is configured for this app.");
+                            }
+                          });
                         }}
                       >
                         Open
@@ -1980,12 +2015,13 @@ export default function UserDashboard() {
             <div className="ud-action-strip ud-bento-actions">
               <div className="ud-action-card">
                 <h3>Complete KYC</h3>
-                <p>Verify your identity for access</p>
+                <p>Status: {kycDashboardLabel}</p>
+                <p className="ud-muted-xs">Verify your identity for full access.</p>
                 <button
                   className="ud-btn-blue"
                   onClick={() => navigate("/profile")}
                 >
-                  Start
+                  {kycDashboardVerified ? "View in profile" : "Continue"}
                 </button>
               </div>
               <div className="ud-action-card">

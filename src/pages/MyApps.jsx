@@ -1,15 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { applicationBackend } from "../services/backendApis";
 import { showError } from "../services/toast";
-import { onMyAppsChanged } from "../services/uiEvents";
+import { invalidateDashboardData } from "../services/dashboardInvalidate";
+import { onMyAppsChanged, onAppsCatalogChanged } from "../services/uiEvents";
+import { openUserCatalogApp } from "../utils/appNavigation";
 
 export default function MyApps() {
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [appsCatalog, setAppsCatalog] = useState([]);
   const [myAppsRaw, setMyAppsRaw] = useState([]);
+  const [catalogReload, setCatalogReload] = useState(0);
+
+  useEffect(() => onAppsCatalogChanged(() => setCatalogReload((n) => n + 1)), []);
 
   useEffect(() => {
     let alive = true;
@@ -53,20 +60,32 @@ export default function MyApps() {
       alive = false;
       off();
     };
-  }, []);
+  }, [catalogReload]);
 
   const myApps = useMemo(() => {
-    const byId = new Map(
-      (Array.isArray(appsCatalog) ? appsCatalog : []).map((a) => [a.appId, a]),
-    );
+    const byId = new Map();
+    (Array.isArray(appsCatalog) ? appsCatalog : []).forEach((a) => {
+      const id = a?.appId ?? a?.id;
+      if (id !== undefined && id !== null) byId.set(id, a);
+    });
     return (Array.isArray(myAppsRaw) ? myAppsRaw : []).map((row) => {
       const meta = byId.get(row.id) || {};
+      const externalUrl = String(meta.externalUrl || "").trim();
+      const routePath = String(meta.routePath || meta.route || "").trim();
+      let appUrl = String(meta.appUrl || "").trim();
+      if (!appUrl) {
+        if (externalUrl) appUrl = externalUrl;
+        else if (routePath) appUrl = routePath.startsWith("/") ? routePath : `/${routePath}`;
+      }
       return {
         appId: meta.appId || row.id,
         name: meta.appName || `App #${row.id}`,
         description: meta.appText || "—",
         category: meta.appType || "APP",
-        appUrl: meta.appUrl || "",
+        appUrl,
+        externalUrl,
+        routePath,
+        status: meta.status,
         visitCounter: row.visitCounter ?? 0,
         subscriptionStatus: String(row.subscriptionStatus || "ACTIVE").toUpperCase(),
         updatedAt: row.updatedAt,
@@ -87,10 +106,16 @@ export default function MyApps() {
     return matchesSearch && matchesCategory;
   });
 
-  const openApp = (url) => {
-    const u = String(url || "").trim();
-    if (!u) return;
-    window.open(u, "_blank", "noopener,noreferrer");
+  const handleOpenMyApp = async (app) => {
+    const r = await openUserCatalogApp(app, {
+      navigate,
+      applicationBackend,
+      allowUnpublished: true,
+      onAfterOpen: () => invalidateDashboardData("application-opened"),
+    });
+    if (!r.ok && r.reason === "no-target") {
+      showError("No link is configured for this app.");
+    }
   };
 
   if (loading) {
@@ -334,7 +359,11 @@ export default function MyApps() {
                       showError("Missing app URL");
                       return;
                     }
-                    openApp(app.appUrl);
+                    // Never block navigation; tracking is best-effort.
+                    Promise.resolve(applicationBackend.open(app.appId))
+                      .catch(() => {})
+                      .finally(() => invalidateDashboardData("application-opened"));
+                    handleOpenMyApp(app);
                   }}
                   onMouseEnter={(e) =>
                     (e.currentTarget.style.backgroundColor = "#1d4ed8")

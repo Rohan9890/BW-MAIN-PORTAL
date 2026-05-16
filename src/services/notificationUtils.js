@@ -47,3 +47,26 @@ export function mapNotificationRows(page) {
 export function countUnreadInNotificationPage(page) {
   return mapNotificationRows(page).filter((r) => !r.read).length;
 }
+
+/** Normalize GET /notifications/unread-count response shapes. */
+export function parseUnreadCountPayload(res) {
+  if (res == null) return null;
+  if (typeof res === "number" && Number.isFinite(res)) return Math.max(0, res);
+  if (typeof res === "string" && /^\d+$/.test(res.trim())) return Math.max(0, Number(res.trim()));
+  if (typeof res === "object") {
+    const raw =
+      res.unreadCount ??
+      res.unread_count ??
+      res.count ??
+      res.totalUnread ??
+      res.total ??
+      res.data;
+    if (typeof raw === "number" && Number.isFinite(raw)) return Math.max(0, raw);
+    if (typeof raw === "string" && /^\d+$/.test(raw.trim())) return Math.max(0, Number(raw.trim()));
+    if (raw && typeof raw === "object") {
+      const inner = raw.unreadCount ?? raw.count;
+      if (typeof inner === "number" && Number.isFinite(inner)) return Math.max(0, inner);
+    }
+  }
+  return null;
+}

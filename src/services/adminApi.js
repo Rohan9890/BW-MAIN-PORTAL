@@ -1,45 +1,72 @@
 import { apiClient } from "./apiClient";
 import { endpoints } from "./endpoints";
 import { mockData } from "./mockData";
-import { cloneDeep, safeServiceCall } from "./serviceUtils";
+import { cloneDeep, USE_MOCK_API } from "./serviceUtils";
 import { getRegisteredUsers } from "./registrationStore";
+const IS_DEV = import.meta.env.DEV;
+
+function isAuthError(err) {
+  return err?.status === 401 || err?.status === 403;
+}
+
+function isNetworkOrOffline(err) {
+  const s = err?.status;
+  if (s === 0 || s === null || s === undefined) return true;
+  if (typeof s === "number" && s >= 500) return true;
+  const msg = String(err?.message || "").toLowerCase();
+  return msg.includes("network") || msg.includes("failed to fetch") || msg.includes("timeout");
+}
 
 export const adminApi = {
   async getDashboardData() {
-    return safeServiceCall({
-      request: () => apiClient.get(endpoints.admin.dashboard),
-      fallback: {
-        stats: mockData.admin.stats,
-        apps: mockData.admin.apps,
-        payments: mockData.admin.payments,
-        tickets: mockData.admin.tickets,
-        activityFeed: mockData.admin.activityFeed,
-        userGrowth: mockData.admin.userGrowth,
-      },
-    });
+    const fallback = {
+      stats: mockData.admin.stats,
+      apps: mockData.admin.apps,
+      payments: mockData.admin.payments,
+      tickets: mockData.admin.tickets,
+      activityFeed: mockData.admin.activityFeed,
+      userGrowth: mockData.admin.userGrowth,
+    };
+    if (USE_MOCK_API) return cloneDeep(fallback);
+    try {
+      return await apiClient.get(endpoints.admin.dashboard);
+    } catch (err) {
+      if (isAuthError(err)) {
+        return { stats: [], apps: [], payments: [], tickets: [], activityFeed: [], userGrowth: [] };
+      }
+      if (IS_DEV && isNetworkOrOffline(err)) return cloneDeep(fallback);
+      throw err;
+    }
   },
 
   async getUsers(params) {
-    return safeServiceCall({
-      request: () => apiClient.get(endpoints.admin.users, { query: params }),
-      fallback: (() => {
-        const stored = getRegisteredUsers();
-        const base = cloneDeep(mockData.admin.users) || [];
-        const mergedByEmail = new Map(
-          base
-            .filter((u) => u?.email)
-            .map((u) => [String(u.email).toLowerCase(), u]),
-        );
-        stored
+    const fallback = (() => {
+      const stored = getRegisteredUsers();
+      const base = cloneDeep(mockData.admin.users) || [];
+      const mergedByEmail = new Map(
+        base
           .filter((u) => u?.email)
-          .forEach((u) => {
-            const key = String(u.email).toLowerCase();
-            mergedByEmail.set(key, u);
-          });
-        const items = Array.from(mergedByEmail.values());
-        return { items, total: items.length };
-      })(),
-    });
+          .map((u) => [String(u.email).toLowerCase(), u]),
+      );
+      stored
+        .filter((u) => u?.email)
+        .forEach((u) => {
+          const key = String(u.email).toLowerCase();
+          mergedByEmail.set(key, u);
+        });
+      const items = Array.from(mergedByEmail.values());
+      return { items, total: items.length };
+    })();
+    if (USE_MOCK_API) return cloneDeep(fallback);
+    try {
+      return await apiClient.get(endpoints.admin.users, { query: params });
+    } catch (err) {
+      if (isAuthError(err)) {
+        return { items: [], total: 0 };
+      }
+      if (IS_DEV && isNetworkOrOffline(err)) return cloneDeep(fallback);
+      throw err;
+    }
   },
 
   async updateUserStatus(userId, status) {
@@ -51,11 +78,17 @@ export const adminApi = {
   },
 
   async exportUsers(params) {
-    return safeServiceCall({
-      request: () =>
-        apiClient.get(`${endpoints.admin.users}/export`, { query: params }),
-      fallback: cloneDeep(mockData.admin.users),
-    });
+    const fallback = cloneDeep(mockData.admin.users);
+    if (USE_MOCK_API) return cloneDeep(fallback);
+    try {
+      return await apiClient.get(`${endpoints.admin.users}/export`, { query: params });
+    } catch (err) {
+      if (isAuthError(err)) {
+        return [];
+      }
+      if (IS_DEV && isNetworkOrOffline(err)) return cloneDeep(fallback);
+      throw err;
+    }
   },
 
   async updateKycStatus(requestId, status) {
@@ -67,13 +100,20 @@ export const adminApi = {
   },
 
   async getTickets(params) {
-    return safeServiceCall({
-      request: () => apiClient.get(endpoints.admin.tickets, { query: params }),
-      fallback: {
-        items: cloneDeep(mockData.admin.tickets),
-        total: mockData.admin.tickets.length,
-      },
-    });
+    const fallback = {
+      items: cloneDeep(mockData.admin.tickets),
+      total: mockData.admin.tickets.length,
+    };
+    if (USE_MOCK_API) return cloneDeep(fallback);
+    try {
+      return await apiClient.get(endpoints.admin.tickets, { query: params });
+    } catch (err) {
+      if (isAuthError(err)) {
+        return { items: [], total: 0 };
+      }
+      if (IS_DEV && isNetworkOrOffline(err)) return cloneDeep(fallback);
+      throw err;
+    }
   },
 
   async updateTicketStatus(ticketId, status) {

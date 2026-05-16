@@ -5,6 +5,7 @@ import { showSuccess, showError } from "../services/toast";
 import "./Registration.css";
 import { buildApiRequestUrl } from "../services/apiConfig";
 
+/** Same origin + path as `apiFetch("/register")` → `buildApiRequestUrl("/register")`; kept explicit for registration-only fetch. */
 const REGISTER_URL = buildApiRequestUrl("/register");
 
 const INDIVIDUAL_FIELDS = [
@@ -322,9 +323,11 @@ export default function Registration() {
         payload.append("referralCode", formData.referral);
       }
 
-      // Debug payload
-      for (const pair of payload.entries()) {
-        console.log(pair[0], pair[1]);
+      if (import.meta.env.DEV) {
+        for (const pair of payload.entries()) {
+          // eslint-disable-next-line no-console
+          console.log(pair[0], pair[1]);
+        }
       }
 
       const response = await fetch(REGISTER_URL, {
@@ -334,7 +337,10 @@ export default function Registration() {
       });
 
       const text = await response.text();
-      console.log("BACKEND RESPONSE:", text);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.log("BACKEND RESPONSE:", text);
+      }
 
       let result;
       try {
@@ -347,15 +353,20 @@ export default function Registration() {
         throw new Error(
           typeof result === "string"
             ? result
-            : result?.message || "Registration failed",
+            : result?.message || result?.error || "Registration failed",
         );
       }
 
       showSuccess("Registration successful");
 
-      setSubmitSuccess(
-        "Verification email sent. Please check your inbox.",
-      );
+      const serverHint =
+        result && typeof result === "object" && !Array.isArray(result)
+          ? String(result.message || result.data?.message || "").trim()
+          : "";
+      const flowReminder =
+        "Next: verify your email using the link we sent → sign in → enter the OTP from email → dashboard.";
+      const successDetail = serverHint ? `${serverHint} ${flowReminder}` : flowReminder;
+      setSubmitSuccess(successDetail);
 
       setFormData({});
       setDocumentType("");
@@ -363,10 +374,19 @@ export default function Registration() {
       setSelectedFile(null);
       setTouched({});
 
-      setTimeout(() => navigate("/login"), 3000);
+      setTimeout(
+        () =>
+          navigate("/login", {
+            state: { message: successDetail },
+          }),
+        3000,
+      );
     } catch (e) {
       const msg = e?.message || "Registration failed";
-      console.error("FINAL ERROR:", msg);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.error("FINAL ERROR:", msg);
+      }
       showError(msg);
       setSubmitError(msg);
     } finally {
