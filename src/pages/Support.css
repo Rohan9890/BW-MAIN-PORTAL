@@ -1,0 +1,326 @@
+/* Premium, modern Support UI (styling only) */
+
+.support-page {
+  --s-bg: #f7fbff;
+  --s-panel: #ffffff;
+  --s-text: #0f172a;
+  --s-muted: #64748b;
+  --s-line: rgba(148, 163, 184, 0.2);
+  --s-blue: #2563eb;
+  --s-blue2: #1d4ed8;
+  --s-shadow: 0 14px 34px rgba(15, 23, 42, 0.08);
+  --s-shadow-hover: 0 18px 46px rgba(15, 23, 42, 0.12);
+
+  background:
+    radial-gradient(circle at 12% 8%, rgba(59, 130, 246, 0.12), transparent 35%),
+    radial-gradient(circle at 90% 18%, rgba(37, 99, 235, 0.09), transparent 32%),
+    linear-gradient(180deg, #f8fbff, var(--s-bg));
+  border-radius: 18px;
+  padding: 12px;
+}
+
+.support-page {
+  display: grid;
+  gap: 16px;
+}
+
+.support-card {
+  background: #ffffff;
+  border: 1px solid var(--s-line);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--s-shadow);
+  transition: all 0.2s ease;
+}
+
+.support-card:hover {
+  box-shadow: var(--s-shadow-hover);
+  transform: translateY(-2px);
+}
+
+.support-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 6px;
+}
+
+.support-subtitle {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.support-input,
+.support-textarea {
+  width: 100%;
+  border-radius: 10px;
+  border: 1.5px solid #e2e8f0;
+  background: #f8fafc;
+  padding: 10px 12px;
+  font-size: 13px;
+  transition: all 0.2s ease;
+}
+
+.support-input:focus,
+.support-textarea:focus {
+  border-color: #93c5fd;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.support-btn {
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  color: #ffffff;
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+  transition: all 0.2s ease;
+}
+
+.support-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(37, 99, 235, 0.45);
+}
+
+.support-divider {
+  height: 1px;
+  background: linear-gradient(to right, transparent, #e2e8f0, transparent);
+  margin: 10px 0;
+}
+
+.support-ticket {
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(248, 250, 252, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  transition: all 0.2s ease;
+}
+
+.support-ticket:hover {
+  background: #ffffff;
+  border-color: rgba(37, 99, 235, 0.22);
+}
+
+.support-action {
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.support-action:hover {
+  color: #2563eb;
+}
+
+/* Inbox list (TicketCenter) */
+.ticket-inbox {
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--s-line);
+  background: var(--s-panel);
+  box-shadow: var(--s-shadow);
+}
+
+.ticket-inbox-head {
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--s-line);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.75), #fff);
+}
+
+.ticket-inbox-head strong {
+  font-size: 13px;
+  font-weight: 950;
+  color: var(--s-text);
+}
+
+.ticket-inbox-list {
+  display: grid;
+}
+
+.ticket-row {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 14px 14px;
+  cursor: pointer;
+  display: grid;
+  gap: 8px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  transition: background 0.18s ease, transform 0.18s ease;
+}
+
+.ticket-row:hover {
+  background: rgba(239, 246, 255, 0.55);
+}
+
+.ticket-row:active {
+  transform: translateY(1px);
+}
+
+.ticket-row-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ticket-row-title {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.ticket-row-title strong {
+  font-size: 13px;
+  font-weight: 950;
+  color: var(--s-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ticket-row-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  color: var(--s-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ticket-row-time {
+  color: var(--s-muted);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.ticket-row-preview {
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.ticket-row-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.7);
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+.ticket-row-dot.recent {
+  background: #2563eb;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+}
+
+/* Skeleton lines (used on ticket detail / list) */
+.s-skeleton {
+  border-radius: 10px;
+  background: linear-gradient(90deg, #eef2ff 25%, #f8fbff 37%, #eef2ff 63%);
+  background-size: 400% 100%;
+  animation: s-shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes s-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+.s-line {
+  height: 12px;
+}
+
+.s-w-60 {
+  width: 60%;
+}
+
+.s-w-40 {
+  width: 40%;
+}
+
+.s-w-85 {
+  width: 85%;
+}
+
+.s-h-18 {
+  height: 18px;
+}
+
+.ticket-raise-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 340px);
+  gap: 12px;
+  align-items: start;
+}
+
+.ticket-help-card {
+  border-radius: 16px;
+  border: 1px solid var(--s-line);
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.85), #fff);
+  box-shadow: var(--s-shadow);
+  padding: 16px;
+  display: grid;
+  gap: 10px;
+}
+
+.ticket-help-card h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 950;
+  color: var(--s-text);
+}
+
+.ticket-help-card p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--s-muted);
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.ticket-help-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+  background: rgba(239, 246, 255, 0.75);
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 900;
+  padding: 6px 10px;
+  width: fit-content;
+}
+
+@media (max-width: 960px) {
+  .ticket-raise-shell {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .support-card {
+    padding: 14px;
+  }
+
+  .support-title {
+    font-size: 16px;
+  }
+}
+
