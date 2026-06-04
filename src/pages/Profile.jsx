@@ -856,13 +856,13 @@ export default function Profile() {
                     </p>
                     {kycDisplayRejectionReason ? (
                       <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
-                        {kycStatus === "REUPLOAD_REQUIRED" ? "Instructions: " : "Reason: "}
-                        {kycDisplayRejectionReason}
-                      </p>
-                    ) : (
-                      <p style={{ margin: 0, fontSize: 13 }}>
-                        Please upload clearer documents and resubmit for review.
-                      </p>
+                      {kycStatus === "REUPLOAD_REQUIRED" ? "Instructions: " : "Reason: "}
+                      {kycDisplayRejectionReason}
+                    </p>
+                  ) : (
+                    <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
+                      Reason: Your KYC was rejected. Please contact support for details.
+                    </p>
                     )}
                   </div>
                 ) : null}

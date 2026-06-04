@@ -67,13 +67,36 @@ function extractUsageTimeseriesPoints(body) {
  */
 export function formatUsageAxisTime(rawTime, granularity) {
   if (rawTime == null || rawTime === "") return "";
+
+  // 24h buckets are integers 0-23
+  if (
+    granularity === "hour" &&
+    (typeof rawTime === "number" || /^\d+$/.test(String(rawTime)))
+  ) {
+    const hour = Number(rawTime);
+
+    if (hour >= 0 && hour <= 23) {
+      return new Date(
+        2000,
+        0,
+        1,
+        hour,
+        0,
+        0
+      ).toLocaleString("en-US", {
+        hour: "numeric",
+        hour12: true,
+      });
+    }
+  }
+
   const d = new Date(rawTime);
-  if (Number.isNaN(d.getTime())) return String(rawTime);
+
+  if (Number.isNaN(d.getTime())) {
+    return String(rawTime);
+  }
 
   if (granularity === "hour") {
-    if (d.getMinutes() === 0 && d.getSeconds() === 0) {
-      return d.toLocaleString("en-US", { hour: "numeric", hour12: true });
-    }
     return d.toLocaleString("en-US", {
       hour: "numeric",
       minute: "2-digit",
@@ -81,7 +104,10 @@ export function formatUsageAxisTime(rawTime, granularity) {
     });
   }
 
-  return d.toLocaleString("en-US", { month: "short", day: "numeric" });
+  return d.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 export function formatUsageCount(value) {
@@ -95,7 +121,9 @@ export function normalizeUsageTimeseriesPayload(body, granularity = "day") {
   const raw = extractUsageTimeseriesPoints(body);
   if (!raw.length) return [];
 
-  return raw.map((row, i) => {
+  console.log("RAW API RESPONSE", raw);
+
+  const normalized = raw.map((row, i) => {
     const rawTime =
       row?.bucket ??
       row?.time ??
@@ -107,12 +135,23 @@ export function normalizeUsageTimeseriesPayload(body, granularity = "day") {
       row?.startDate ??
       row?.endDate ??
       row?.day;
+      
     const usage = pickUsageMetric(row);
+    console.log("ROW", row, "USAGE", usage);
+
     let timeLabel = String(row?.label ?? row?.timeLabel ?? "").trim();
     if (!timeLabel && rawTime) {
       timeLabel = formatUsageAxisTime(rawTime, granularity);
     }
     if (!timeLabel) timeLabel = `T${i + 1}`;
-    return { timeLabel, usage, rawTime: rawTime != null ? String(rawTime) : `i-${i}` };
+    
+    return { 
+      timeLabel, 
+      usage, 
+      rawTime: rawTime != null ? String(rawTime) : `i-${i}` 
+    };
   });
+
+  console.log("NORMALIZED SERIES", normalized);
+  return normalized;
 }

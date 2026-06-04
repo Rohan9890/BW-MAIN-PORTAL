@@ -78,8 +78,9 @@ export default function MyApps() {
             : Array.isArray(mine?.applications)
             ? mine.applications
             : [];
-    
+            console.log("MY APPS API RESPONSE", mineData);
         setMyAppsRaw(mineData);
+        
     
       } catch (serviceError) {
     
@@ -105,6 +106,7 @@ export default function MyApps() {
     
         const mine =
           await applicationBackend.my();
+          console.log("MY APPS API RESPONSE", mine);
     
         const mineData =
     

@@ -1317,7 +1317,10 @@ export default function UserDashboard() {
         if (normalized.length > 0) {
           usageDataCacheRef.current.set(cacheKey, normalized);
         }
+        console.log("Usage API response:", body);
+        console.log("Normalized chart rows:", normalized);
         setUsageSeriesRows(normalized);
+        console.log("NORMALIZED CHART DATA", normalized);
         setUsageChartError("");
       })
       .catch((err) => {
