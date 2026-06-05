@@ -338,10 +338,8 @@ export default function Registration() {
       }
 
       if (import.meta.env.DEV) {
-        for (const pair of payload.entries()) {
-          // eslint-disable-next-line no-console
-          console.log(pair[0], pair[1]);
-        }
+        // eslint-disable-next-line no-console
+        console.log("[Registration] submit fields:", [...payload.keys()]);
       }
 
       const response = await fetch(REGISTER_URL, {
@@ -353,7 +351,11 @@ export default function Registration() {
       const text = await response.text();
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
-        console.log("BACKEND RESPONSE:", text);
+        console.log("[Registration] response", {
+          status: response.status,
+          ok: response.ok,
+          bodyLength: text.length,
+        });
       }
 
       let result;

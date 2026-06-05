@@ -194,9 +194,9 @@ async function withRetry(fn, { maxAttempts, label }) {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      if (attempt > 1) {
-        // Keep retry transparent for debugging/ops without changing UX layout.
-        console.info(
+      if (attempt > 1 && import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
           `[AdminDashboard] retrying ${label} (attempt ${attempt}/${maxAttempts})`,
         );
       }
@@ -1401,20 +1401,13 @@ export default function AdminDashboard() {
     // eslint-disable-next-line no-console
     console.groupCollapsed("[DASHBOARD_SUMMARY_AUDIT] UI pipeline");
     // eslint-disable-next-line no-console
-    console.log("A) `summary` state (object from getSummary)", summary);
-    // eslint-disable-next-line no-console
-    console.log(
-      "B) `summaryTotals` (toFiniteNumber applied in AdminDashboard)",
+    console.log("[DASHBOARD_SUMMARY_AUDIT] UI pipeline", {
       summaryTotals,
-    );
-    // eslint-disable-next-line no-console
-    console.log(
-      "C) `dashboardAdminStats` card values (template + KPI overrides)",
-      (dashboardAdminStats || []).map((c) => ({
+      cards: (dashboardAdminStats || []).map((c) => ({
         label: c.label,
         value: c.value,
       })),
-    );
+    });
     // eslint-disable-next-line no-console
     console.groupEnd();
   }, [summary, summaryTotals, dashboardAdminStats]);
@@ -1439,9 +1432,8 @@ export default function AdminDashboard() {
     if (!import.meta.env.DEV) return;
     // eslint-disable-next-line no-console
     console.log("[DASHBOARD_GROWTH_AUDIT]", {
-      rawApiUserGrowth: apiUserGrowth,
-      normalizedChartData: chartData,
-      renderModel: growthChartModel,
+      pointCount: chartData.length,
+      seriesLength: growthChartModel?.series?.length ?? 0,
     });
   }, [apiUserGrowth, chartData, growthChartModel]);
 
@@ -2667,10 +2659,13 @@ export default function AdminDashboard() {
                             );
                             showSuccess("Ticket resolved successfully");
                           } catch (e) {
-                            console.warn(
-                              "[AdminDashboard] resolveTicket failed",
-                              e,
-                            );
+                            if (import.meta.env.DEV) {
+                              // eslint-disable-next-line no-console
+                              console.warn(
+                                "[AdminDashboard] resolveTicket failed",
+                                e?.message,
+                              );
+                            }
                             setError(e?.message || "Failed to resolve ticket");
                             showApiErrorToast("Failed to resolve ticket", e);
                           } finally {

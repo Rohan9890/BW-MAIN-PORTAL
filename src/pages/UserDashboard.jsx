@@ -748,9 +748,14 @@ export default function UserDashboard() {
       return;
     }
 
-    if (DEBUG_DASHBOARD && recentR.status === "fulfilled") {
+    if (import.meta.env.DEV && DEBUG_DASHBOARD && recentR.status === "fulfilled") {
+      const count = Array.isArray(recentR.value)
+        ? recentR.value.length
+        : Array.isArray(recentR.value?.data)
+          ? recentR.value.data.length
+          : 0;
       // eslint-disable-next-line no-console
-      console.log("Recent Apps API response:", recentR.value);
+      console.log("[UserDashboard] recent apps loaded", { count });
     }
 
     if (requestId !== dashboardRequestIdRef.current) {
@@ -1308,9 +1313,12 @@ export default function UserDashboard() {
       ),
     )
       .then((body) => {
-        if (DEBUG_DASHBOARD && gen === usageFetchGenRef.current) {
+        if (import.meta.env.DEV && DEBUG_DASHBOARD && gen === usageFetchGenRef.current) {
           // eslint-disable-next-line no-console
-          console.log("Usage API response:", body);
+          console.log("[UserDashboard] usage timeseries fetched", {
+            range: usageRange,
+            granularity,
+          });
         }
         if (gen !== usageFetchGenRef.current) return;
         const normalized = normalizeUsageTimeseriesPayload(

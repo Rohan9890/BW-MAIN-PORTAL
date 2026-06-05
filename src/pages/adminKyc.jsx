@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { adminDashboardApi } from "../services/adminDashboardApi";
 import { resolveKycApiPathId } from "../utils/kycAdmin";
 import { getApiOrigin } from "../services/apiConfig";
-import { resolveKycDocumentUrl } from "../utils/mediaUrl";
+import KycDocumentLink from "../components/KycDocumentLink";
 import { showError, showSuccess } from "../services/toast";
 
 export default function AdminKyc() {
@@ -132,15 +132,12 @@ export default function AdminKyc() {
 
                 <td>
                   {k.filePath || k.documentUrl || k.documentFile ? (
-                    <a
-                      href={resolveKycDocumentUrl(
-                        k.filePath || k.documentUrl || k.documentFile,
-                      )}
-                      target="_blank"
-                      rel="noreferrer"
+                    <KycDocumentLink
+                      storedUrl={k.filePath || k.documentUrl || k.documentFile}
+                      admin
                     >
                       View
-                    </a>
+                    </KycDocumentLink>
                   ) : (
                     "—"
                   )}

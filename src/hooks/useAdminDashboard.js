@@ -159,7 +159,10 @@ export function useAdminDashboard() {
           setUsers(fetchedUsers);
         }
       } catch (err) {
-        console.error("AdminDashboard error:", err);
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.warn("AdminDashboard error:", err?.message);
+        }
         if (isMounted) {
           setError(err?.message || "Something went wrong");
         }

@@ -129,7 +129,8 @@ export default function Home() {
     if (!import.meta.env.DEV || greetingDevLogOnce.current) return;
     if (initializing) return;
     greetingDevLogOnce.current = true;
-    console.log("Greeting profile:", profile);
+    // eslint-disable-next-line no-console
+    console.log("[Home] greeting ready");
   }, [profile, initializing]);
 
   const stats = Array.isArray(homeData.stats) ? homeData.stats : [];

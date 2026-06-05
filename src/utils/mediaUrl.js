@@ -248,6 +248,37 @@ export function resolveUploadsUrl(value) {
   return joinUploadsUrl(ORIGIN, raw);
 }
 
+/** True when URL targets a private S3 object (not yet presigned). */
+export function isPrivateS3DocumentUrl(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw || !/^https?:\/\//i.test(raw)) return false;
+  if (isPresignedS3Url(raw)) return false;
+  return /\.s3\.[a-z0-9-]+\.amazonaws\.com\//i.test(raw);
+}
+
+/** Any S3 KYC object URL (private or presigned). */
+export function isS3KycDocumentUrl(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw || !/^https?:\/\//i.test(raw)) return false;
+  return /\.s3\.[a-z0-9-]+\.amazonaws\.com\//i.test(raw);
+}
+
+/** AWS SigV4 presigned GET URLs include these query params. */
+export function isPresignedS3Url(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+  try {
+    const u = new URL(raw);
+    return (
+      u.searchParams.has("X-Amz-Signature") ||
+      u.searchParams.has("X-Amz-Algorithm") ||
+      /[?&]X-Amz-Signature=/i.test(raw)
+    );
+  } catch {
+    return /[?&]X-Amz-Signature=/i.test(raw);
+  }
+}
+
 /**
  * KYC / identity documents — canonical: `/uploads/documents/{file}`.
  * Legacy `/uploads/kyc/*` paths are passed through unchanged.
@@ -260,6 +291,9 @@ export function resolveKycDocumentUrl(value) {
   if (!raw || isUnusableMediaUrl(raw)) return "";
 
   if (/^(https?:|data:|blob:)/i.test(raw)) {
+    // Private/presigned S3 must use document-access — never expose in href/img src.
+    if (isS3KycDocumentUrl(raw)) return "";
+
     const rewritten = rewriteMisplacedApiOriginUrl(raw, {
       profile: false,
       kycDocument: true,

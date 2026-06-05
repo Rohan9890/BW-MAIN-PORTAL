@@ -77,16 +77,13 @@ export async function apiFetch(url, options = {}) {
     attachAuth &&
     mergedHeaders.Authorization
   ) {
+    // eslint-disable-next-line no-console
     console.group("[AUTH DEBUG] outgoing GET /profile");
-    console.log("Authorization header (exact full string):", mergedHeaders.Authorization);
-    console.log("Bearer JWT only (exact):", token);
-    console.log(
-      "Equivalent curl (headers match Postman “Bearer Token”):",
-      `curl -sS -i -H "Authorization: Bearer ${token}" "${requestUrl}"`,
-    );
-    console.info(
-      "Backend header format: standard `Authorization: Bearer <JWT>` (RFC 6750); same token returns 200 from server curl per backend docs.",
-    );
+    // eslint-disable-next-line no-console
+    console.log("Bearer JWT length:", token.length);
+    // eslint-disable-next-line no-console
+    console.log("Request URL:", requestUrl);
+    // eslint-disable-next-line no-console
     console.groupEnd();
   }
 
@@ -97,12 +94,16 @@ export async function apiFetch(url, options = {}) {
 
   if (profileVerbose) {
     const t = token ? String(token).trim() : "";
-    console.group("[profile] apiFetch — verbose (VITE_DEBUG_PROFILE)");
-    console.log("path:", url, "→", requestUrl);
-    console.log("token in localStorage:", Boolean(t), "| length:", t.length);
-    console.log("attachAuth:", attachAuth, "| publicPath:", publicPath);
-    console.log("full request headers:", { ...mergedHeaders });
-    console.groupEnd();
+    // eslint-disable-next-line no-console
+    console.log("[profile] apiFetch verbose", {
+      path: url,
+      requestUrl,
+      tokenPresent: Boolean(t),
+      tokenLength: t.length,
+      attachAuth,
+      publicPath,
+      authorizationPresent: Boolean(mergedHeaders.Authorization),
+    });
   }
 
   const res = await fetch(requestUrl, {
@@ -121,28 +122,13 @@ export async function apiFetch(url, options = {}) {
   }
 
   if (import.meta.env.DEV && isProfilePath && res.status === 401) {
-    try {
-      const errText = await res.clone().text();
-      console.warn(
-        "[profile] 401 response body (backend):",
-        errText || "(empty)",
-      );
-    } catch (e) {
-      console.warn("[profile] could not read 401 body:", e);
-    }
+    // eslint-disable-next-line no-console
+    console.warn("[profile] 401 unauthorized");
   }
 
   if (profileVerbose) {
+    // eslint-disable-next-line no-console
     console.log("[profile] response status:", res.status, res.statusText);
-    try {
-      const raw = await res.clone().text();
-      console.log(
-        "[profile] response body:",
-        raw.length > 1200 ? `${raw.slice(0, 1200)}… (${raw.length} chars)` : raw || "(empty)",
-      );
-    } catch (readErr) {
-      console.warn("[profile] could not read response body:", readErr);
-    }
   }
 
   const otpLike =

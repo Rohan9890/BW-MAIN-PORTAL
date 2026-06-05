@@ -173,17 +173,13 @@ export function dashboardSummaryNormalize(raw, options = {}) {
 
   if (IS_DEV) {
     // eslint-disable-next-line no-console
-    console.groupCollapsed("[DASHBOARD_SUMMARY_AUDIT] user");
-    // eslint-disable-next-line no-console
-    console.log("raw", raw);
-    // eslint-disable-next-line no-console
-    console.log("layers", layers);
-    // eslint-disable-next-line no-console
-    console.log("totalApps source", totalAppsSource, "→", totalApps);
-    // eslint-disable-next-line no-console
-    console.log("normalized", normalized);
-    // eslint-disable-next-line no-console
-    console.groupEnd();
+    console.log("[DASHBOARD_SUMMARY_AUDIT] user", {
+      totalAppsSource,
+      totalApps,
+      openTickets: normalized.openTickets,
+      totalTransactions: normalized.totalTransactions,
+      layerCount: layers.length,
+    });
   }
 
   return normalized;

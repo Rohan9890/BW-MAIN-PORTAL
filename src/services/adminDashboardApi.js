@@ -130,23 +130,12 @@ function logDashboardSummaryKpiAuditDev({ res, unwrapInput, layers, flat, normal
           }`;
   }
   // eslint-disable-next-line no-console
-  console.groupCollapsed("[DASHBOARD_SUMMARY_AUDIT]");
-  // eslint-disable-next-line no-console
-  console.log("1) post-envelope `res` from backendJson(/admin/dashboard/summary)", res);
-  // eslint-disable-next-line no-console
-  console.log("2) unwrap input (res?.data ?? res)", unwrapInput);
-  // eslint-disable-next-line no-console
-  console.log("3) inspection layers (outer → inner; stats blobs inlined)", layers);
-  // eslint-disable-next-line no-console
-  console.log("4) flat KPI picks fed into normalizeSummaryNumbers()", flat);
-  // eslint-disable-next-line no-console
-  console.log("5) field provenance (per-key pick rule)", provenance);
-  // eslint-disable-next-line no-console
-  console.log("6) normalized summary → AdminDashboard cards", normalized);
-  // eslint-disable-next-line no-console
-  console.log("7) DEV legacy adminApi/mock fallback used?", Boolean(usedFallback));
-  // eslint-disable-next-line no-console
-  console.groupEnd();
+  console.log("[DASHBOARD_SUMMARY_AUDIT] admin", {
+    normalized,
+    layerCount: layers.length,
+    usedFallback: Boolean(usedFallback),
+    provenanceKeys: Object.keys(provenance),
+  });
 }
 
 /**
@@ -182,7 +171,13 @@ async function withRetryOnce(fn, meta) {
   try {
     return await fn();
   } catch (err) {
-    console.warn("[adminDashboardApi] request failed (retrying once)", meta, err);
+    if (import.meta.env.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn("[adminDashboardApi] request failed (retrying once)", meta, {
+        status: err?.status,
+        message: err?.message,
+      });
+    }
     return await fn();
   }
 }
@@ -212,7 +207,13 @@ export const adminDashboardApi = {
       });
       return normalized;
     } catch (err) {
-      console.warn("[adminDashboardApi] getSummary failed", err);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn("[adminDashboardApi] getSummary failed", {
+          status: err?.status,
+          message: err?.message,
+        });
+      }
       if (isAuthError(err)) {
         throw err;
       }
@@ -248,7 +249,13 @@ export const adminDashboardApi = {
       );
       return unwrapArray(res);
     } catch (err) {
-      console.warn("[adminDashboardApi] getUserGrowth failed", err);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn("[adminDashboardApi] getUserGrowth failed", {
+          status: err?.status,
+          message: err?.message,
+        });
+      }
       if (isAuthError(err)) {
         throw err;
       }
@@ -273,7 +280,13 @@ export const adminDashboardApi = {
       );
       return unwrapArray(res);
     } catch (err) {
-      console.warn("[adminDashboardApi] getActivity failed", err);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn("[adminDashboardApi] getActivity failed", {
+          status: err?.status,
+          message: err?.message,
+        });
+      }
       if (isAuthError(err)) {
         throw err;
       }
@@ -370,7 +383,13 @@ export const adminDashboardApi = {
       );
       return unwrapArray(res);
     } catch (err) {
-      console.warn("[adminDashboardApi] getRecentUsers failed", err);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn("[adminDashboardApi] getRecentUsers failed", {
+          status: err?.status,
+          message: err?.message,
+        });
+      }
       if (isAuthError(err)) {
         throw err;
       }
@@ -395,7 +414,13 @@ export const adminDashboardApi = {
       const parsedTickets = unwrapArray(response);
       return parsedTickets;
     } catch (err) {
-      console.warn("[adminDashboardApi] getOpenTickets failed", err);
+      if (import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn("[adminDashboardApi] getOpenTickets failed", {
+          status: err?.status,
+          message: err?.message,
+        });
+      }
       if (isAuthError(err)) {
         throw err;
       }
@@ -504,11 +529,14 @@ export const adminDashboardApi = {
       import.meta.env.VITE_KYC_DETAIL_AUDIT !== "false"
     ) {
       const unwrapped = unwrapKycDetailRecord(raw, { matchId: id });
+      // eslint-disable-next-line no-console
       console.debug("[kyc-detail] getKycDetail", {
         id,
-        raw,
-        unwrapped,
         dataIsArray: Array.isArray(raw?.data),
+        unwrappedKeys:
+          unwrapped && typeof unwrapped === "object"
+            ? Object.keys(unwrapped)
+            : null,
       });
     }
     return raw;
@@ -559,7 +587,11 @@ export const adminDashboardApi = {
 /** DEV-only audit for admin app logo/banner upload responses. */
 export function logDevAppAssetUploadAudit(res, meta = {}) {
   if (!import.meta.env.DEV) return;
-  console.debug("[admin-apps] asset upload response", { res, ...meta });
+  // eslint-disable-next-line no-console
+  console.debug("[admin-apps] asset upload response", {
+    ...meta,
+    responseKeys: res && typeof res === "object" ? Object.keys(res) : null,
+  });
 }
 
 /** Check upload response includes expected logo/banner URL fields. */

@@ -78,7 +78,10 @@ export default function MyApps() {
             : Array.isArray(mine?.applications)
             ? mine.applications
             : [];
-            console.log("MY APPS API RESPONSE", mineData);
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.log("[MyApps] loaded", { count: mineData.length });
+        }
         setMyAppsRaw(mineData);
         
     
@@ -106,7 +109,6 @@ export default function MyApps() {
     
         const mine =
           await applicationBackend.my();
-          console.log("MY APPS API RESPONSE", mine);
     
         const mineData =
     
@@ -123,8 +125,10 @@ export default function MyApps() {
         setMyAppsRaw(mineData);
     
       } catch (err) {
-    
-        console.error(err);
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.warn("[MyApps] refresh failed", err?.message || "unknown error");
+        }
       }
     };
     

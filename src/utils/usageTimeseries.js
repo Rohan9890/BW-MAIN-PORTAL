@@ -537,10 +537,5 @@ export function normalizeUsageTimeseriesPayload(
     };
   });
 
-  if (import.meta.env.DEV) {
-    // eslint-disable-next-line no-console
-    console.log("[usageTimeseries] normalized", normalized.length, "points", normalized);
-  }
-
   return normalized;
 }

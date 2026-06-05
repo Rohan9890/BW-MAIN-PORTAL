@@ -11,8 +11,12 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error) {
-    // Keep silent in UI; console helps during QA.
-    console.error("UI ErrorBoundary caught:", error);
+    // Intentional: surface unexpected render failures without leaking user data.
+    // eslint-disable-next-line no-console
+    console.error(
+      "UI ErrorBoundary caught:",
+      error?.message || "unknown error",
+    );
   }
 
   render() {

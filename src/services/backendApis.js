@@ -4,6 +4,10 @@ import {
   backendMultipart,
   backendPost,
 } from "./backendClient";
+import {
+  assertKycMultipartFormData,
+  logKycMultipartDev,
+} from "../utils/kycUpload";
 
 /**
  * Spring often returns 500 "No static resource …" when a route is not mapped (not 404).
@@ -20,11 +24,29 @@ function isMissingBackendRouteError(err) {
         err?.response?.data?.message ??
         "",
     ).toLowerCase();
-    if (msg.includes("no static resource") || msg.includes("static resource")) {
+    if (
+      msg.includes("no static resource") ||
+      msg.includes("static resource") ||
+      msg.includes("nohandlerfound") ||
+      msg.includes("no handler found") ||
+      msg.includes("no endpoint") ||
+      msg.includes("not found") && msg.includes("kyc")
+    ) {
       return true;
     }
   }
   return false;
+}
+
+async function withAdminKycRouteFallback(primaryCall, fallbackCall) {
+  try {
+    return await primaryCall();
+  } catch (err) {
+    if (isMissingBackendRouteError(err)) {
+      return fallbackCall();
+    }
+    throw err;
+  }
 }
 
 /**
@@ -96,7 +118,10 @@ export const adminAuthBackend = {
       // eslint-disable-next-line no-console
       console.log("body keys:", Object.keys(json));
       // eslint-disable-next-line no-console
-      console.log("email (full):", trimmedEmail);
+      console.log(
+        "email: length only =",
+        typeof trimmedEmail === "string" ? trimmedEmail.length : 0,
+      );
       // eslint-disable-next-line no-console
       console.log(
         "password: length only =",
@@ -143,14 +168,6 @@ export const adminAuthBackend = {
               err?.payload && typeof err.payload === "object"
                 ? Object.keys(err.payload)
                 : null,
-            payloadPreview:
-              err?.payload && typeof err.payload === "object"
-                ? {
-                    error: err.payload.error,
-                    message: err.payload.message,
-                    status: err.payload.status,
-                  }
-                : err?.payload,
           });
         }
         throw err;
@@ -168,7 +185,7 @@ export const adminAuthBackend = {
         console.warn(
           "[adminAuthBackend.verifyOtp] error response:",
           err?.status,
-          err?.payload ?? err?.message,
+          err?.message,
         );
       }
       throw err;
@@ -390,10 +407,17 @@ function unwrapFavoritesList(res) {
           }
         }
   
-        console.log(
-          "FAVORITES API RESPONSE:",
-          res
-        );
+        if (import.meta.env.DEV) {
+          const count = Array.isArray(res)
+            ? res.length
+            : Array.isArray(res?.data)
+              ? res.data.length
+              : Array.isArray(res?.content)
+                ? res.content.length
+                : 0;
+          // eslint-disable-next-line no-console
+          console.log("[favoritesBackend.list] loaded", { count });
+        }
   
         // DIRECT ARRAY
         if (Array.isArray(res)) {
@@ -422,12 +446,15 @@ function unwrapFavoritesList(res) {
         return unwrapFavoritesList(res);
   
       } catch (err) {
-  
-        console.error(
-          "Favorites fetch failed:",
-          err
-        );
-  
+        if (import.meta.env.DEV) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            "[favoritesBackend.list] fetch failed",
+            err?.status,
+            err?.message,
+          );
+        }
+
         return [];
       }
     },
@@ -473,77 +500,162 @@ function unwrapFavoritesList(res) {
     },
   };
 
+function submitKycMultipart(path, formData) {
+  assertKycMultipartFormData(formData);
+  logKycMultipartDev(path, formData);
+  return backendMultipart(path, formData);
+}
+
+function kycPresignStoredUrlQuery(storedUrl) {
+  return new URLSearchParams({
+    storedUrl: String(storedUrl ?? "").trim(),
+  });
+}
+
+/** Legacy servers map GET /admin/kyc/document-access → /{kycId} (Long parse error). */
+export function isKycPresignRouteCollisionError(err) {
+  if (err?.status !== 500) return false;
+  const msg = String(
+    err?.message ??
+      err?.payload?.message ??
+      err?.data?.message ??
+      "",
+  ).toLowerCase();
+  return (
+    msg.includes("methodargumenttypemismatch") ||
+    (msg.includes("failed to convert") && msg.includes("long")) ||
+    (msg.includes("document-access") && msg.includes("long"))
+  );
+}
+
+/** Try next presign route when endpoint is missing or collides with /{kycId}. */
+export function isRetriableKycPresignError(err) {
+  const st = err?.status;
+  if (st === 404 || st === 405) return true;
+  return isKycPresignRouteCollisionError(err);
+}
+
+async function fetchKycPresignUrl(pathAttempts, storedUrl, opts = {}) {
+  const canonical = String(storedUrl ?? "").trim();
+  const quiet = { suppressGlobalServerErrorToast: true, ...opts };
+  let lastErr;
+
+  for (const attempt of pathAttempts) {
+    try {
+      if (attempt.method === "POST") {
+        return await backendJson(attempt.path, {
+          method: "POST",
+          json: { storedUrl: canonical },
+          ...quiet,
+          ...attempt.opts,
+        });
+      }
+      const qs = kycPresignStoredUrlQuery(canonical);
+      return await backendJson(`${attempt.path}?${qs.toString()}`, {
+        method: "GET",
+        ...quiet,
+        ...attempt.opts,
+      });
+    } catch (err) {
+      lastErr = err;
+      if (!isRetriableKycPresignError(err)) throw err;
+    }
+  }
+
+  throw lastErr ?? new Error("KYC document presign unavailable");
+}
+
 export const kycBackend = {
   me() {
     return backendJson("/kyc/me", { method: "GET" });
   },
-  /** Multipart KYC document upload */
+  /** Presigned URL for user's own KYC file (collision-safe path order). */
+  documentAccess(storedUrl, opts = {}) {
+    return fetchKycPresignUrl(
+      [
+        { method: "GET", path: "/kyc-documents/presign-url" },
+        { method: "POST", path: "/kyc/presign" },
+        { method: "GET", path: "/kyc/presign-url" },
+        { method: "GET", path: "/kyc/document-access" },
+      ],
+      storedUrl,
+      opts,
+    );
+  },
+  /** Multipart KYC document upload — POST /kyc/upload */
   upload(formData) {
-    return backendMultipart("/kyc/upload", formData);
+    return submitKycMultipart("/kyc/upload", formData);
   },
   /** Multipart re-upload after REJECTED / REUPLOAD_REQUIRED — POST /profile/kyc/reupload */
   reupload(formData) {
-    return backendMultipart("/profile/kyc/reupload", formData);
+    return submitKycMultipart("/profile/kyc/reupload", formData);
   },
   resubmit(payload) {
     return backendPost("/kyc/resubmit", payload ?? {});
   },
 };
 
-/** Admin KYC moderation — canonical `/kyc/*` (Authify contract). */
+/** Admin KYC moderation — canonical `/admin/kyc/*` (Spring Authify backend). */
 export const kycAdminBackend = {
-  async listAll(opts = {}) {
+  listAll(opts = {}) {
     const quiet = { suppressGlobalServerErrorToast: true, ...opts };
-    try {
-      return await backendJson("/kyc/all", { method: "GET", ...opts });
-    } catch (err) {
-      if (err?.status === 404 || err?.status === 405) {
-        return backendJson("/admin/kyc/all", { method: "GET", ...quiet });
-      }
-      throw err;
-    }
+    return withAdminKycRouteFallback(
+      () => backendJson("/admin/kyc/all", { method: "GET", ...opts }),
+      () => backendJson("/kyc/all", { method: "GET", ...quiet }),
+    );
   },
-  async listPending(opts = {}) {
+  listPending(opts = {}) {
     const quiet = { suppressGlobalServerErrorToast: true, ...opts };
-    try {
-      return await backendJson("/kyc/pending", { method: "GET", ...opts });
-    } catch (err) {
-      if (err?.status === 404 || err?.status === 405) {
-        return backendJson("/admin/kyc/pending", { method: "GET", ...quiet });
-      }
-      throw err;
-    }
+    return withAdminKycRouteFallback(
+      () => backendJson("/admin/kyc/pending", { method: "GET", ...opts }),
+      () => backendJson("/kyc/pending", { method: "GET", ...quiet }),
+    );
   },
-  getByUserId(userId, opts = {}) {
-    const id = encodeURIComponent(String(userId));
+  getByKycId(kycId, opts = {}) {
+    const id = encodeURIComponent(String(kycId));
     const quiet = { suppressGlobalServerErrorToast: true, ...opts };
-    return backendJson(`/kyc/${id}`, { method: "GET", ...opts }).catch((err) => {
-      if (err?.status === 404 || err?.status === 405) {
-        return backendJson(`/admin/kyc/${id}`, { method: "GET", ...quiet });
-      }
-      throw err;
-    });
+    return withAdminKycRouteFallback(
+      () => backendJson(`/admin/kyc/${id}`, { method: "GET", ...opts }),
+      () => backendJson(`/kyc/${id}`, { method: "GET", ...quiet }),
+    );
   },
-  verify(userId, body = {}, opts = {}) {
-    const id = encodeURIComponent(String(userId));
+  /** @deprecated use getByKycId — numeric KYC record id, not USR-* userId */
+  getByUserId(kycId, opts = {}) {
+    return kycAdminBackend.getByKycId(kycId, opts);
+  },
+  /** Presigned URL for admin review (collision-safe path order). */
+  documentAccess(storedUrl, opts = {}) {
+    return fetchKycPresignUrl(
+      [
+        { method: "GET", path: "/admin/kyc-documents/presign-url" },
+        { method: "POST", path: "/admin/kyc/presign" },
+        { method: "GET", path: "/admin/kyc/presign-url" },
+        { method: "GET", path: "/admin/kyc/document-access" },
+      ],
+      storedUrl,
+      opts,
+    );
+  },
+  verify(kycId, body = {}, opts = {}) {
+    const id = encodeURIComponent(String(kycId));
     const quiet = { suppressGlobalServerErrorToast: true, ...opts };
-    return backendJson(`/kyc/verify/${id}`, {
-      method: "PUT",
-      json: body,
-      ...opts,
-    }).catch((err) => {
-      if (err?.status === 404 || err?.status === 405) {
-        return backendJson(`/admin/kyc/verify/${id}`, {
+    return withAdminKycRouteFallback(
+      () =>
+        backendJson(`/admin/kyc/verify/${id}`, {
+          method: "PUT",
+          json: body,
+          ...opts,
+        }),
+      () =>
+        backendJson(`/kyc/verify/${id}`, {
           method: "PUT",
           json: body,
           ...quiet,
-        });
-      }
-      throw err;
-    });
+        }),
+    );
   },
-  reject(userId, body = {}, opts = {}) {
-    const id = encodeURIComponent(String(userId));
+  reject(kycId, body = {}, opts = {}) {
+    const id = encodeURIComponent(String(kycId));
     const reasonRaw =
       (typeof body?.reason === "string" && body.reason.trim()) ||
       (typeof body?.rejectionReason === "string" && body.rejectionReason.trim()) ||
@@ -565,20 +677,20 @@ export const kycAdminBackend = {
         : body && typeof body === "object"
           ? body
           : {};
-    return backendJson(`/kyc/reject/${id}${qs}`, {
-      method: "PUT",
-      json: rejectBody,
-      ...opts,
-    }).catch((err) => {
-      if (err?.status === 404 || err?.status === 405) {
-        return backendJson(`/admin/kyc/reject/${id}${qs}`, {
+    return withAdminKycRouteFallback(
+      () =>
+        backendJson(`/admin/kyc/reject/${id}${qs}`, {
+          method: "PUT",
+          json: rejectBody,
+          ...opts,
+        }),
+      () =>
+        backendJson(`/kyc/reject/${id}${qs}`, {
           method: "PUT",
           json: rejectBody,
           ...quiet,
-        });
-      }
-      throw err;
-    });
+        }),
+    );
   },
 };
 

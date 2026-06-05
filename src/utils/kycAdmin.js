@@ -1,4 +1,11 @@
-import { resolveKycDocumentUrl } from "./mediaUrl";
+import {
+  KYC_DOCUMENT_URL_KEYS,
+  pickPrimaryKycDocumentStoredUrl,
+  resolveKycDocumentCandidates,
+} from "./kycDocumentCandidates";
+import { isS3KycDocumentUrl, resolveKycDocumentUrl } from "./mediaUrl";
+
+export { hasKycDocumentCandidates, resolveKycDocumentCandidates } from "./kycDocumentCandidates";
 
 /** Canonical workflow values used for filters + stats (uppercase). */
 export const KYC_CANONICAL = {
@@ -205,22 +212,23 @@ function isActiveDocStatus(status) {
 }
 
 function extractEmbeddedDocumentUrl(entry) {
-  if (typeof entry === "string") return absolutizePossibleApiUrl(entry);
+  if (typeof entry === "string") return safeStr(entry);
   if (!entry || typeof entry !== "object") return "";
-  return absolutizePossibleApiUrl(
-    pickFirst(
-      entry.url,
-      entry.fileUrl,
-      entry.downloadUrl,
-      entry.path,
-      entry.link,
-      entry.href,
-      entry.filePath,
-      entry.documentUrl,
-      entry.documentFile,
-      entry.document_file,
-      entry.imageUrl,
-    ),
+  return pickFirst(
+    entry.url,
+    entry.fileUrl,
+    entry.downloadUrl,
+    entry.path,
+    entry.link,
+    entry.href,
+    entry.filePath,
+    entry.documentUrl,
+    entry.documentFile,
+    entry.document_file,
+    entry.imageUrl,
+    entry.aadhaarFrontUrl,
+    entry.frontDocumentUrl,
+    entry.backDocumentUrl,
   );
 }
 
@@ -299,51 +307,16 @@ function dedupeDocumentEntriesByUrl(entries) {
 }
 
 function resolvePrimaryDocumentUrl(row, raw) {
-  const urlFrom = (...keys) => {
-    for (const k of keys) {
-      const u = absolutizePossibleApiUrl(safeStr(row[k]));
-      if (u) return u;
-    }
-    if (raw) {
-      for (const k of keys) {
-        const u = absolutizePossibleApiUrl(safeStr(raw[k]));
-        if (u) return u;
-      }
-    }
-    return "";
-  };
-
-  return urlFrom(
-    "filePath",
-    "file_path",
-    "documentUrl",
-    "document_url",
-    "documentFile",
-    "document_file",
-    "documentPath",
-    "document_path",
-    "imageUrl",
-    "image_url",
-    "file_url",
+  const primary = pickPrimaryKycDocumentStoredUrl(
+    raw && typeof raw === "object" ? { ...row, _raw: raw } : row,
   );
+  if (primary) return primary;
+  return pickPrimaryKycDocumentStoredUrl(row);
 }
 
 function resolvePreviousRejectedDocumentUrl(row, raw) {
-  const urlFrom = (...keys) => {
-    for (const k of keys) {
-      const u = absolutizePossibleApiUrl(safeStr(row[k]));
-      if (u) return u;
-    }
-    if (raw) {
-      for (const k of keys) {
-        const u = absolutizePossibleApiUrl(safeStr(raw[k]));
-        if (u) return u;
-      }
-    }
-    return "";
-  };
-
-  return urlFrom(
+  const nodes = [row, raw].filter((n) => n && typeof n === "object");
+  const keys = [
     "previousDocumentUrl",
     "previousFilePath",
     "previousDocumentPath",
@@ -353,17 +326,29 @@ function resolvePreviousRejectedDocumentUrl(row, raw) {
     "archivedFilePath",
     "priorDocumentUrl",
     "priorFilePath",
-  );
+  ];
+  for (const node of nodes) {
+    for (const k of keys) {
+      const s = safeStr(node[k]);
+      if (s) return s;
+    }
+  }
+  return "";
 }
 
 function toPreviewSlot(label, url, idSeed) {
-  const u = absolutizePossibleApiUrl(url);
-  if (!u) return null;
+  const stored = safeStr(url);
+  if (!stored) return null;
+  const needsPresign = isS3KycDocumentUrl(stored);
+  const u = needsPresign ? "" : absolutizePossibleApiUrl(stored);
+  if (!needsPresign && !u) return null;
   return {
     id: `${idSeed}-${label.replace(/\s+/g, "-")}`,
     label,
+    storedUrl: stored,
     url: u,
-    kind: kycUrlLooksLikePdf(u) ? "pdf" : "image",
+    needsPresign,
+    kind: kycUrlLooksLikePdf(stored) ? "pdf" : "image",
   };
 }
 
@@ -474,6 +459,7 @@ export function getAdminKycDocumentPreviewSlots(row) {
     row.kycDocumentUrls ||
     (raw && (raw.documents || raw.kycDocuments || raw.kycDocumentUrls));
 
+  const fieldCandidates = resolveKycDocumentCandidates(row);
   const sortedEntries = dedupeDocumentEntriesByUrl(
     sortEmbeddedDocumentEntries(collectEmbeddedDocumentEntries(embedded)),
   );
@@ -487,6 +473,14 @@ export function getAdminKycDocumentPreviewSlots(row) {
 
   /** @type {{ id: string, label: string, url: string, kind: "image"|"pdf" }[]} */
   const out = [];
+
+  if (fieldCandidates.length) {
+    for (const candidate of fieldCandidates.slice(0, 6)) {
+      const slot = toPreviewSlot(candidate.label, candidate.storedUrl, candidate.key);
+      if (slot) out.push(slot);
+    }
+    if (out.length) return out;
+  }
 
   if (sortedEntries.length) {
     const latestActive =
@@ -542,7 +536,12 @@ const DEV_KYC_DETAIL_AUDIT =
 
 function auditKycDetail(label, payload) {
   if (!DEV_KYC_DETAIL_AUDIT) return;
-  console.debug(`[kyc-detail] ${label}`, payload);
+  const meta =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? { keys: Object.keys(payload) }
+      : { type: Array.isArray(payload) ? "array" : typeof payload };
+  // eslint-disable-next-line no-console
+  console.debug(`[kyc-detail] ${label}`, meta);
 }
 
 function pickKycRecordFromArray(arr, matchId, matchKycId = "", matchUserId = "") {
@@ -655,23 +654,7 @@ export function mergeAdminKycDetailRow(normalizedRow, detail) {
 }
 
 /** Preserve document URLs when re-syncing the drawer from the list after reload. */
-const KYC_DOC_URL_KEYS = [
-  "filePath",
-  "documentUrl",
-  "documentFile",
-  "imageUrl",
-  "aadhaarFrontUrl",
-  "aadhaarBackUrl",
-  "panCardUrl",
-  "passportUrl",
-  "drivingLicenseUrl",
-  "livePhotoUrl",
-  "documentFrontUrl",
-  "documentBackUrl",
-  "frontDocumentUrl",
-  "backDocumentUrl",
-  "selfieUrl",
-];
+const KYC_DOC_URL_KEYS = KYC_DOCUMENT_URL_KEYS;
 
 export function kycNormalizedRowToDetailPatch(row) {
   if (!row || typeof row !== "object") return {};
@@ -820,150 +803,137 @@ export function normalizeAdminKycRow(raw, index = 0) {
 
   const documentNumber = pickFirst(r.documentNumber, r.idNumber, r.docNumber, r.panNumber, r.aadhaarNumber);
 
-  const aadhaarFrontUrl = absolutizePossibleApiUrl(
-    pickFirst(r.aadhaarFrontUrl, r.aadhaar_front_url, nestedProfile?.aadhaarFrontUrl),
+  const pickRawDoc = (...vals) => pickFirst(...vals);
+
+  const aadhaarFrontUrl = pickRawDoc(
+    r.aadhaarFrontUrl,
+    r.aadhaar_front_url,
+    nestedProfile?.aadhaarFrontUrl,
   );
-  const aadhaarBackUrl = absolutizePossibleApiUrl(
-    pickFirst(r.aadhaarBackUrl, r.aadhaar_back_url, nestedProfile?.aadhaarBackUrl),
+  const aadhaarBackUrl = pickRawDoc(
+    r.aadhaarBackUrl,
+    r.aadhaar_back_url,
+    nestedProfile?.aadhaarBackUrl,
   );
-  const panCardUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.panCardUrl,
-      r.pan_url,
-      r.panImageUrl,
-      r.panDocumentUrl,
-      r.panFrontUrl,
-      nestedProfile?.panCardUrl,
-      nestedProfile?.pan_url,
-    ),
+  const panCardUrl = pickRawDoc(
+    r.panCardUrl,
+    r.pan_url,
+    r.panImageUrl,
+    r.panDocumentUrl,
+    r.panFrontUrl,
+    nestedProfile?.panCardUrl,
+    nestedProfile?.pan_url,
   );
-  const passportUrl = absolutizePossibleApiUrl(
-    pickFirst(r.passportUrl, r.passportImageUrl, r.passportFrontUrl, nestedProfile?.passportUrl),
+  const passportUrl = pickRawDoc(
+    r.passportUrl,
+    r.passportImageUrl,
+    r.passportFrontUrl,
+    nestedProfile?.passportUrl,
   );
-  const drivingLicenseUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.drivingLicenseUrl,
-      r.dlUrl,
-      r.drivingLicenceUrl,
-      r.licenseFrontUrl,
-      nestedProfile?.drivingLicenseUrl,
-    ),
+  const drivingLicenseUrl = pickRawDoc(
+    r.drivingLicenseUrl,
+    r.dlUrl,
+    r.drivingLicenceUrl,
+    r.licenseFrontUrl,
+    nestedProfile?.drivingLicenseUrl,
   );
-  const livePhotoUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.livePhotoUrl,
-      r.live_photo_url,
-      r.livePhoto,
-      r.livenessImageUrl,
-      r.livenessUrl,
-      nestedProfile?.livePhotoUrl,
-    ),
+  const livePhotoUrl = pickRawDoc(
+    r.livePhotoUrl,
+    r.live_photo_url,
+    r.livePhoto,
+    r.livenessImageUrl,
+    r.livenessUrl,
+    nestedProfile?.livePhotoUrl,
   );
-  const filePath = absolutizePossibleApiUrl(
-    pickFirst(
-      r.filePath,
-      r.file_path,
-      r.documentFile,
-      r.document_file,
-      r.documentPath,
-      r.document_path,
-      r.documentUrl,
-      r.document_url,
-      r.imageUrl,
-      r.image_url,
-      nestedProfile?.filePath,
-      nestedProfile?.documentFile,
-      nestedProfile?.documentUrl,
-      nestedApplication?.filePath,
-      nestedApplication?.documentFile,
-      nestedApplication?.documentUrl,
-    ),
+  const filePath = pickRawDoc(
+    r.filePath,
+    r.file_path,
+    r.documentFile,
+    r.document_file,
+    r.documentPath,
+    r.document_path,
+    r.documentUrl,
+    r.document_url,
+    r.imageUrl,
+    r.image_url,
+    nestedProfile?.filePath,
+    nestedProfile?.documentFile,
+    nestedProfile?.documentUrl,
+    nestedApplication?.filePath,
+    nestedApplication?.documentFile,
+    nestedApplication?.documentUrl,
   );
-  const documentUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.documentUrl,
-      r.document_url,
-      r.documentFile,
-      r.document_file,
-      r.filePath,
-      r.file_path,
-      nestedProfile?.documentUrl,
-      nestedProfile?.documentFile,
-      nestedApplication?.documentUrl,
-      nestedApplication?.documentFile,
-    ),
+  const documentUrl = pickRawDoc(
+    r.documentUrl,
+    r.document_url,
+    r.documentFile,
+    r.document_file,
+    r.filePath,
+    r.file_path,
+    nestedProfile?.documentUrl,
+    nestedProfile?.documentFile,
+    nestedApplication?.documentUrl,
+    nestedApplication?.documentFile,
   );
-  const documentFile = absolutizePossibleApiUrl(
-    pickFirst(
-      r.documentFile,
-      r.document_file,
-      r.documentUrl,
-      r.document_url,
-      r.filePath,
-      nestedProfile?.documentFile,
-      nestedApplication?.documentFile,
-    ),
+  const documentFile = pickRawDoc(
+    r.documentFile,
+    r.document_file,
+    r.documentUrl,
+    r.document_url,
+    r.filePath,
+    nestedProfile?.documentFile,
+    nestedApplication?.documentFile,
   );
-  const documentFrontUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.documentFrontUrl,
-      r.documentFront,
-      r.document_front,
-      nestedProfile?.documentFrontUrl,
-      nestedProfile?.documentFront,
-    ),
+  const documentFrontUrl = pickRawDoc(
+    r.documentFrontUrl,
+    r.documentFront,
+    r.document_front,
+    nestedProfile?.documentFrontUrl,
+    nestedProfile?.documentFront,
   );
-  const documentBackUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.documentBackUrl,
-      r.documentBack,
-      r.document_back,
-      nestedProfile?.documentBackUrl,
-      nestedProfile?.documentBack,
-    ),
+  const documentBackUrl = pickRawDoc(
+    r.documentBackUrl,
+    r.documentBack,
+    r.document_back,
+    nestedProfile?.documentBackUrl,
+    nestedProfile?.documentBack,
   );
 
-  const frontDocumentUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.frontDocumentUrl,
-      r.frontUrl,
-      r.documentFrontUrl,
-      r.idFrontUrl,
-      r.frontImageUrl,
-      r.aadhaarFrontUrl,
-      r.aadhaar_front_url,
-      r.panCardUrl,
-      r.pan_url,
-      r.passportUrl,
-      r.drivingLicenseUrl,
-      r.documentFront,
-      r.document_front,
-      nestedProfile?.aadhaarFrontUrl,
-    ),
+  const frontDocumentUrl = pickRawDoc(
+    r.frontDocumentUrl,
+    r.frontUrl,
+    r.documentFrontUrl,
+    r.idFrontUrl,
+    r.frontImageUrl,
+    r.aadhaarFrontUrl,
+    r.aadhaar_front_url,
+    r.panCardUrl,
+    r.pan_url,
+    r.passportUrl,
+    r.drivingLicenseUrl,
+    r.documentFront,
+    r.document_front,
+    nestedProfile?.aadhaarFrontUrl,
   );
-  const backDocumentUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.backDocumentUrl,
-      r.backUrl,
-      r.documentBackUrl,
-      r.idBackUrl,
-      r.backImageUrl,
-      r.aadhaarBackUrl,
-      r.aadhaar_back_url,
-      r.documentBack,
-      r.document_back,
-      nestedProfile?.aadhaarBackUrl,
-    ),
+  const backDocumentUrl = pickRawDoc(
+    r.backDocumentUrl,
+    r.backUrl,
+    r.documentBackUrl,
+    r.idBackUrl,
+    r.backImageUrl,
+    r.aadhaarBackUrl,
+    r.aadhaar_back_url,
+    r.documentBack,
+    r.document_back,
+    nestedProfile?.aadhaarBackUrl,
   );
-  const selfieUrl = absolutizePossibleApiUrl(
-    pickFirst(
-      r.selfieUrl,
-      r.selfieImageUrl,
-      r.faceUrl,
-      r.portraitUrl,
-      nestedProfile?.selfieUrl,
-      nestedProfile?.selfieImageUrl,
-    ),
+  const selfieUrl = pickRawDoc(
+    r.selfieUrl,
+    r.selfieImageUrl,
+    r.faceUrl,
+    r.portraitUrl,
+    nestedProfile?.selfieUrl,
+    nestedProfile?.selfieImageUrl,
   );
 
   const submittedAtRaw = pickFirst(

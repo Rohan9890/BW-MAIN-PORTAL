@@ -209,22 +209,21 @@ export default function Login() {
       if (!token) throw new Error("Invalid login response");
 
       if (isAuthTokenDebugEnabled()) {
-        const storedBefore = localStorage.getItem("ui-access-token");
-        console.group("[AUTH DEBUG] verify-otp → token");
-        console.log("response top-level keys:", Object.keys(data || {}));
-        console.log("extracted JWT (exact):", token);
-        console.log("JWT length:", token.length);
-        console.log("token had whitespace-only trim applied:", true);
-        console.log("localStorage ui-access-token before save:", storedBefore);
-        console.groupEnd();
+        // eslint-disable-next-line no-console
+        console.log("[AUTH DEBUG] verify-otp", {
+          responseKeys: Object.keys(data || {}),
+          jwtLength: token.length,
+          hadStoredToken: Boolean(localStorage.getItem("ui-access-token")),
+        });
       }
 
       await onLoginSuccess({ token, userId, role });
 
       if (isAuthTokenDebugEnabled()) {
         const stored = localStorage.getItem("ui-access-token");
-        console.log("[AUTH DEBUG] after onLoginSuccess — stored === extracted:", stored === token);
-        if (stored !== token) {
+        const matched = stored === token;
+        if (!matched) {
+          // eslint-disable-next-line no-console
           console.warn("[AUTH DEBUG] token mismatch after save", {
             extractedLen: token.length,
             storedLen: stored?.length ?? 0,
