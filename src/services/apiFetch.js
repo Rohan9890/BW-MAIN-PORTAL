@@ -1,5 +1,5 @@
 import toast from "react-hot-toast";
-import { forceLogoutClient } from "./apiClient";
+import { forceLogoutClient } from "./logoutBridge";
 import {
   buildApiRequestUrl,
   isAuthTokenDebugEnabled,

@@ -1,12 +1,4 @@
-export { apiClient } from "./apiClient";
 export { endpoints } from "./endpoints";
-export { authApi } from "./authApi";
-export { adminApi } from "./adminApi";
 export { dashboardApi } from "./dashboardApi";
-export { appsApi } from "./appsApi";
-export { usersApi } from "./usersApi";
-export { activityApi } from "./activityApi";
-export { profileApi } from "./profileApi";
-export { settingsApi } from "./settingsApi";
 export { plansApi } from "./plansApi";
 export { paymentApi } from "./paymentApi";

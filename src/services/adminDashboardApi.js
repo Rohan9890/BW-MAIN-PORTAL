@@ -1,5 +1,4 @@
 import { backendJson, backendMultipart } from "./backendClient";
-import { adminApi } from "./adminApi";
 import { mockData } from "./mockData";
 import { unwrapKycDetailRecord } from "../utils/kycAdmin";
 import {
@@ -218,9 +217,9 @@ export const adminDashboardApi = {
       }
       if (!IS_DEV) throw err;
       if (!isNetworkOrOffline(err)) throw err;
-      const fallback = await adminApi.getDashboardData().catch(() => null);
-      const raw = fallback?.data?.statsSummary ?? fallback?.statsSummary ?? fallback ?? {};
-      const unwrapInput = raw?.data ?? raw ?? {};
+      // DEV offline: use mock data directly — same data getDashboardData() returns when offline
+      const raw = { stats: mockData?.admin?.stats };
+      const unwrapInput = raw;
       const layers = collectSummaryInspectionLayers(unwrapInput);
       const flat = buildSummaryFlatFromLayers(layers);
       const normalized = normalizeSummaryNumbers(flat);
@@ -254,8 +253,8 @@ export const adminDashboardApi = {
       }
       if (!IS_DEV) throw err;
       if (!isNetworkOrOffline(err)) throw err;
-      const fallback = await adminApi.getDashboardData().catch(() => null);
-      const maybe = fallback?.data?.userGrowth ?? fallback?.userGrowth ?? null;
+      // DEV offline: use mock data directly
+      const maybe = mockData?.admin?.userGrowth ?? null;
       return Array.isArray(maybe) ? maybe : [];
     }
   },
@@ -279,8 +278,8 @@ export const adminDashboardApi = {
       }
       if (!IS_DEV) throw err;
       if (!isNetworkOrOffline(err)) throw err;
-      const fallback = await adminApi.getDashboardData().catch(() => null);
-      const maybe = fallback?.data?.activityFeed ?? fallback?.activityFeed ?? null;
+      // DEV offline: use mock data directly
+      const maybe = mockData?.admin?.activityFeed ?? null;
       return Array.isArray(maybe) ? maybe : [];
     }
   },
@@ -376,9 +375,8 @@ export const adminDashboardApi = {
       }
       if (!IS_DEV) throw err;
       if (!isNetworkOrOffline(err)) throw err;
-      const fallback = await adminApi.getUsers({ limit: 5 }).catch(() => null);
-      const items = fallback?.data?.items ?? fallback?.items ?? null;
-      return Array.isArray(items) ? items.slice(0, 5) : IS_DEV ? (mockData?.admin?.users?.slice(0, 5) ?? []) : [];
+      // DEV offline: use mock data directly
+      return mockData?.admin?.users?.slice(0, 5) ?? [];
     }
   },
 

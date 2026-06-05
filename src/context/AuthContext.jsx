@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { setLogoutHandler } from "../services/apiClient";
+import { setLogoutHandler } from "../services/logoutBridge";
 import { profileBackend } from "../services/backendApis";
 import { invalidateDashboardBundleCache } from "../services/dashboardBundleCache";
 import { cancelDebouncedDashboardInvalidate } from "../services/dashboardInvalidate";
