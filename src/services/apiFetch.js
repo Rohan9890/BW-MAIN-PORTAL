@@ -1,3 +1,4 @@
+import toast from "react-hot-toast";
 import { forceLogoutClient } from "./apiClient";
 import {
   buildApiRequestUrl,
@@ -11,6 +12,7 @@ import {
   normalizeAuthPath,
   urlIncludesVerifyOtp,
 } from "./authPaths";
+import { isJwtExpired } from "../utils/jwtUtils";
 
 export { PUBLIC_AUTH_PATHS_LIST } from "./authPaths";
 export { isPublicAuthPath, normalizeAuthPath } from "./authPaths";
@@ -37,6 +39,30 @@ export async function apiFetch(url, options = {}) {
   const publicPath = isPublicAuthPath(url);
   /** Never attach Bearer on login / OTP / password reset — stale JWT causes "session expired". */
   const attachAuth = !publicPath && Boolean(token);
+
+  /**
+   * Proactive expiry guard: if the token is already expired, clear auth and redirect
+   * *before* making a request rather than waiting for a backend 401.
+   * Skipped on auth-flow pages (login, otp, etc.) to avoid redirecting away mid-flow.
+   */
+  if (
+    attachAuth &&
+    isJwtExpired(token) &&
+    (typeof window === "undefined" || !isAuthFlowAppPath(window.location.pathname))
+  ) {
+    setTimeout(() => {
+      try {
+        toast.error("Your session has expired. Please sign in again.", { duration: 4000 });
+      } catch {
+        /* toast unavailable — silently ignored */
+      }
+      forceLogoutClient();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login";
+      }
+    }, 100);
+    return null;
+  }
 
   const mergedHeaders = {
     ...(isFormData ? {} : { "Content-Type": "application/json" }),

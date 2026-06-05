@@ -30,6 +30,18 @@ function readApiOriginFromEnv() {
   );
 }
 
+/**
+ * Production runtime guard — throws immediately if the build was deployed without
+ * `VITE_API_URL` set, preventing silent fallback to same-origin `/api/v1.0/...`.
+ * Has no effect in development or test environments.
+ */
+if (import.meta.env.PROD && !readApiOriginFromEnv()) {
+  throw new Error(
+    "[BW-PORTAL] VITE_API_URL is required in production. " +
+      "Rebuild with VITE_API_URL set to your backend origin (e.g. http://your-server:8080).",
+  );
+}
+
 export function getApiOrigin() {
   const fromEnv = readApiOriginFromEnv();
   if (fromEnv) return fromEnv;
