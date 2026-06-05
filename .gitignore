@@ -28,6 +28,9 @@ dist-ssr
 /blob-report/
 /playwright/.cache/
 
+# Backend sources live in a separate repo (Authentification_BW)
+backend/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
