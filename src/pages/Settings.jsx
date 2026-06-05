@@ -542,22 +542,18 @@ export default function Settings() {
 
   useEffect(() => {
     void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     void loadSessions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     setTheme(draft.darkMode ? "dark" : "light");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.darkMode]);
 
   useEffect(() => {
     persistExtras(extras);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [extras]);
 
   const save = async () => {

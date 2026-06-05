@@ -11,10 +11,6 @@ export async function withRetryOnce(fn, options = {}) {
     if (typeof onRetrying === "function") {
       onRetrying();
     }
-    try {
-      return await fn();
-    } catch (secondErr) {
-      throw secondErr;
-    }
+    return await fn();
   }
 }

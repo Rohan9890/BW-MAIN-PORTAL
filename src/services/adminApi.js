@@ -3,7 +3,7 @@ import { ticketsBackend } from "./backendApis";
 import { backendJson } from "./backendClient";
 import { endpoints } from "./endpoints";
 import { mockData } from "./mockData";
-import { cloneDeep, USE_MOCK_API } from "./serviceUtils";
+import { cloneDeep, safeServiceCall, USE_MOCK_API } from "./serviceUtils";
 import { getRegisteredUsers } from "./registrationStore";
 const IS_DEV = import.meta.env.DEV;
 

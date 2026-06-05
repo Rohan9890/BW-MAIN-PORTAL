@@ -194,9 +194,9 @@ async function withRetry(fn, { maxAttempts, label }) {
   let lastErr;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      if (attempt > 1) {
-        // Keep retry transparent for debugging/ops without changing UX layout.
-        console.info(
+      if (attempt > 1 && import.meta.env.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(
           `[AdminDashboard] retrying ${label} (attempt ${attempt}/${maxAttempts})`,
         );
       }
@@ -1038,8 +1038,9 @@ export default function AdminDashboard() {
         setApiRecentUsers([]);
         // Do NOT clear tickets here; avoid overwriting a previously successful tickets state.
       } finally {
-        if (!mounted) return;
-        setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
     })();
 

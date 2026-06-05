@@ -4,13 +4,22 @@ import { normalizeProfilePayload, useAuth } from "../context/AuthContext";
 import { kycBackend, profileBackend } from "../services/backendApis";
 import {
   extractProfilePhotoFromPayload,
-  resolveKycDocumentUrl,
   resolveProfilePhotoUrl,
 } from "../utils/mediaUrl";
 import { invalidateDashboardData } from "../services/dashboardInvalidate";
 import { showError, showSuccess } from "../services/toast";
 import { maskDocumentNumber, safeUpper } from "../utils/mask";
 import { canonicalizeKycStatus, KYC_CANONICAL, kycCanonicalLabel, normalizeUserKycMePayload, pickProfileKycRejectionReason } from "../utils/kycAdmin";
+import {
+  buildKycUploadFormData,
+  formatKycUploadApiError,
+  KycUploadValidationError,
+  normalizeKycDocumentType,
+} from "../utils/kycUpload";
+import { maskKycStoredLabel } from "../utils/kycDocumentAccess";
+import { pickPrimaryKycDocumentStoredUrl } from "../utils/kycDocumentCandidates";
+import KycDocumentLink from "../components/KycDocumentLink";
+import KycDocumentPreview from "../components/KycDocumentPreview";
 import { buildReferralRegistrationLink } from "../utils/referralStorage";
 import "./Profile.css";
 
@@ -19,23 +28,11 @@ const KYC_POLL_MS = 60_000;
 const EMAIL_UPDATE_NOTICE =
   "Email updates are managed by administrators. Please contact support.";
 
-const KYC_REUPLOAD_DOCUMENT_TYPES = ["AADHAAR", "PAN", "DRIVING_LICENSE"];
-
-function normalizeKycDocumentType(value) {
-  const raw = String(value || "")
-    .trim()
-    .toUpperCase();
-  if (!raw) return "";
-  if (raw === "AADHAR") return "AADHAAR";
-  if (raw === "DL" || raw === "DRIVING LICENSE") return "DRIVING_LICENSE";
-  return raw;
-}
-
 function validateKycReuploadFields(documentType, documentNumber) {
   const type = normalizeKycDocumentType(documentType);
   const number = String(documentNumber || "").trim();
   if (!type) return "Select a document type.";
-  if (!KYC_REUPLOAD_DOCUMENT_TYPES.includes(type)) {
+  if (!["AADHAAR", "PAN", "DRIVING_LICENSE"].includes(type)) {
     return "Unsupported document type.";
   }
   if (!number) return "Enter the document number.";
@@ -73,6 +70,9 @@ export default function Profile() {
   const [kycPendingFile, setKycPendingFile] = useState(null);
   const [kycReuploadDocType, setKycReuploadDocType] = useState("");
   const [kycReuploadDocNumber, setKycReuploadDocNumber] = useState("");
+
+  const [kycDocType, setKycDocType] = useState("");
+  const [kycDocNumber, setKycDocNumber] = useState("");
   const [contactEmailNoticeOpen, setContactEmailNoticeOpen] = useState(false);
   const navigate = useNavigate();
   const { token: authToken, hydrateProfile, logout } = useAuth();
@@ -415,18 +415,22 @@ export default function Profile() {
 
     setKycUploading(true);
     try {
+      const documentType = kycNeedsReupload
+        ? normalizeKycDocumentType(kycReuploadDocType)
+        : normalizeKycDocumentType(kycDocType);
+      const documentNumber = kycNeedsReupload
+        ? String(kycReuploadDocNumber || "").trim()
+        : String(kycDocNumber || "").trim();
+      const fd = buildKycUploadFormData({
+        file,
+        documentType,
+        documentNumber,
+      });
+
       if (kycNeedsReupload) {
-        const documentType = normalizeKycDocumentType(kycReuploadDocType);
-        const documentNumber = String(kycReuploadDocNumber || "").trim();
-        const fd = new FormData();
-        fd.append("documentType", documentType);
-        fd.append("documentNumber", documentNumber);
-        fd.append("file", file);
         await kycBackend.reupload(fd);
         showSuccess("KYC documents re-uploaded for review");
       } else {
-        const fd = new FormData();
-        fd.append("file", file);
         await kycBackend.upload(fd);
         showSuccess("KYC document uploaded");
       }
@@ -434,9 +438,11 @@ export default function Profile() {
       await fetchProfile();
       invalidateDashboardData(kycNeedsReupload ? "kyc-reupload" : "kyc-upload");
     } catch (e) {
+      const fallback = kycNeedsReupload ? "KYC re-upload failed" : "KYC upload failed";
       showError(
-        e?.message ||
-          (kycNeedsReupload ? "KYC re-upload failed" : "KYC upload failed"),
+        e instanceof KycUploadValidationError
+          ? e.message
+          : formatKycUploadApiError(e, fallback),
       );
     } finally {
       setKycUploading(false);
@@ -567,7 +573,13 @@ export default function Profile() {
 
   const docType = String(kyc?.documentType || profile?.documentType || "").trim();
   const docNumber = maskDocumentNumber(kyc?.documentNumber || profile?.documentNumber);
-  const filePath = String(kyc?.filePath || profile?.filePath || "").trim();
+  const filePath = pickPrimaryKycDocumentStoredUrl({
+    ...profile,
+    ...kyc,
+    kyc: profile?.kyc || kyc,
+    _raw: kyc?._raw || profile?.kyc || kyc,
+  });
+  const filePathLabel = maskKycStoredLabel(filePath);
   const uploadedAt = kyc?.uploadedAt ? new Date(kyc.uploadedAt) : null;
 
   const kycDisplayRejectionReason = pickProfileKycRejectionReason(profile, kyc);
@@ -856,16 +868,18 @@ export default function Profile() {
                     </p>
                     {kycDisplayRejectionReason ? (
                       <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
-                      {kycStatus === "REUPLOAD_REQUIRED" ? "Instructions: " : "Reason: "}
-                      {kycDisplayRejectionReason}
-                    </p>
-                  ) : (
-                    <p style={{ margin: 0, fontSize: 13, fontWeight: 600 }}>
-                      Reason: Your KYC was rejected. Please contact support for details.
-                    </p>
+                        {kycStatus === "REUPLOAD_REQUIRED" ? "Instructions: " : "Reason: "}
+                        {kycDisplayRejectionReason}
+                      </p>
+                    ) : (
+                      <p style={{ margin: 0, fontSize: 13 }}>
+                        Please upload clearer documents and resubmit for review.
+                      </p>
                     )}
                   </div>
                 ) : null}
+
+
 
                 <div className="pf-fields" style={{ marginBottom: 14 }}>
                   <div className="pf-field pf-field--span">
@@ -924,6 +938,66 @@ export default function Profile() {
                             </div>
                           </div>
                         ) : null}
+
+{!kycNeedsReupload ? (
+  <div
+    className="pf-fields pf-fields--2"
+    style={{ marginBottom: 12 }}
+  >
+    <div className="pf-field">
+
+      <div className="pf-label">
+        Document type
+      </div>
+
+      <select
+        className="pf-input"
+        value={kycDocType}
+        onChange={(e) =>
+          setKycDocType(e.target.value)
+        }
+      >
+        <option value="">
+          Select document type
+        </option>
+
+        <option value="AADHAAR">
+          Aadhaar
+        </option>
+
+        <option value="PAN">
+          PAN
+        </option>
+
+        <option value="DRIVING_LICENSE">
+          Driving License
+        </option>
+
+      </select>
+
+    </div>
+
+    <div className="pf-field">
+
+      <div className="pf-label">
+        Document number
+      </div>
+
+      <input
+        className="pf-input"
+        type="text"
+        value={kycDocNumber}
+        onChange={(e) =>
+          setKycDocNumber(e.target.value)
+        }
+        placeholder="Document Number"
+      />
+
+    </div>
+
+  </div>
+) : null}
+
                         <input
                           ref={kycFileRef}
                           type="file"
@@ -1013,14 +1087,22 @@ export default function Profile() {
                             className="pf-value pf-mono"
                             style={{ opacity: 0.75, textDecoration: "line-through" }}
                           >
-                            {filePath}
+                            {filePathLabel}
                           </div>
                         </div>
                       ) : (
                         <>
                           <div className="pf-field">
-                            <div className="pf-label">Uploaded file</div>
-                            <div className="pf-value pf-mono">{filePath || "—"}</div>
+                            <div className="pf-label">Uploaded Document</div>
+                            {filePath ? (
+                              <KycDocumentPreview storedUrl={filePath} />
+                            ) : (
+                              <div className="pf-value">—</div>
+                            )}
+                          </div>
+                          <div className="pf-field">
+                            <div className="pf-label">File</div>
+                            <div className="pf-value pf-mono">{filePathLabel}</div>
                           </div>
                           <div className="pf-field">
                             <div className="pf-label">Uploaded</div>
@@ -1096,14 +1178,10 @@ export default function Profile() {
 
                     <div className="pf-actions">
                       {filePath && !kycNeedsReupload ? (
-                        <a
+                        <KycDocumentLink
+                          storedUrl={filePath}
                           className="pf-btn pf-btn--ghost"
-                          href={resolveKycDocumentUrl(filePath)}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View / Download
-                        </a>
+                        />
                       ) : null}
                       {safeUpper(kyc?.status) === "PENDING" || kycStatus === "UNDER_REVIEW" ? (
                         <button

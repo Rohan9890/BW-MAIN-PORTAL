@@ -77,11 +77,10 @@ export default function TicketDetail() {
       setError(e?.message || "Failed to load ticket details.");
     } finally {
       activeFetchCountRef.current = Math.max(0, activeFetchCountRef.current - 1);
-      if (!mountedRef.current || requestSeq !== inFlightRef.current.seq) {
-        return;
+      if (mountedRef.current && requestSeq === inFlightRef.current.seq) {
+        setLoading(false);
+        setRefreshing(false);
       }
-      setLoading(false);
-      setRefreshing(false);
     }
   };
 

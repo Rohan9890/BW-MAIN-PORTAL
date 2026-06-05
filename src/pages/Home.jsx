@@ -129,6 +129,7 @@ export default function Home() {
     if (!import.meta.env.DEV || greetingDevLogOnce.current) return;
     if (initializing) return;
     greetingDevLogOnce.current = true;
+    // eslint-disable-next-line no-console
     console.log("Greeting profile:", profile);
   }, [profile, initializing]);
 

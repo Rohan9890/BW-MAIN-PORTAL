@@ -82,6 +82,7 @@ export function logDevApiTransport({
   const authPresent = Boolean(
     authorizationHeader && String(authorizationHeader).trim(),
   );
+  // eslint-disable-next-line no-console
   console.log(`[API:${source}]`, {
     finalUrl,
     authorizationPresent: authPresent,

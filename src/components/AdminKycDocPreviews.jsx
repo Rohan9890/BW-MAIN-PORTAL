@@ -7,7 +7,12 @@ import {
   useRef,
   useState,
 } from "react";
-import { getAdminKycDocumentPreviewSlots } from "../utils/kycAdmin";
+import { useKycAccessibleUrl } from "../hooks/useKycAccessibleUrl";
+import {
+  getAdminKycDocumentPreviewSlots,
+  hasKycDocumentCandidates,
+} from "../utils/kycAdmin";
+import { KYC_DOCUMENT_URL_KEYS } from "../utils/kycDocumentCandidates";
 import "./AdminKycDocPreviews.css";
 
 const DEV_KYC_PREVIEW_AUDIT =
@@ -18,7 +23,12 @@ const FORCE_IMG_VISIBLE = import.meta.env.VITE_KYC_FORCE_IMG_VISIBLE === "true";
 
 function auditKycPreview(label, payload) {
   if (!DEV_KYC_PREVIEW_AUDIT) return;
-  console.debug(`[kyc-preview] ${label}`, payload);
+  const meta =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? { keys: Object.keys(payload) }
+      : { type: Array.isArray(payload) ? "array" : typeof payload };
+  // eslint-disable-next-line no-console
+  console.debug(`[kyc-preview] ${label}`, meta);
 }
 
 function probeImageReady(img) {
@@ -27,10 +37,20 @@ function probeImageReady(img) {
 }
 
 const DocSlot = memo(function DocSlot({ slot }) {
+  const storedUrl = slot.storedUrl || slot.url;
+  const {
+    url: displayUrl,
+    status: accessStatus,
+    retry,
+    refreshOnExpired,
+    canRetry,
+  } = useKycAccessibleUrl(storedUrl, { admin: true });
+
   const [phase, setPhase] = useState("loading");
-  const [retry, setRetry] = useState(0);
+  const [imgRetry, setImgRetry] = useState(0);
   const imgRef = useRef(null);
   const phaseRef = useRef(phase);
+  const expiredRefreshRef = useRef(false);
   phaseRef.current = phase;
 
   const logPhase = useCallback(
@@ -38,105 +58,88 @@ const DocSlot = memo(function DocSlot({ slot }) {
       auditKycPreview("phase", {
         from: phaseRef.current,
         to: next,
-        url: slot.url,
         label: slot.label,
         ...meta,
       });
       setPhase(next);
     },
-    [slot.url, slot.label],
+    [slot.label],
   );
 
   const tryMarkReady = useCallback(
     (img, source) => {
-      if (!img || !slot.url) return false;
+      if (!img || !displayUrl) return false;
       const ready = probeImageReady(img);
-      auditKycPreview("probe", {
-        source,
-        complete: img.complete,
-        naturalWidth: img.naturalWidth,
-        naturalHeight: img.naturalHeight,
-        ready,
-        src: img.currentSrc || img.src,
-        className: img.className,
-        phase: phaseRef.current,
-      });
+      auditKycPreview("probe", { source, ready, phase: phaseRef.current });
       if (ready) {
         logPhase("ready", { source });
         return true;
       }
       return false;
     },
-    [slot.url, logPhase],
+    [displayUrl, logPhase],
   );
 
   const imgCallbackRef = useCallback(
     (node) => {
       imgRef.current = node;
-      if (!node) return;
+      if (!node || !displayUrl) return;
       if (tryMarkReady(node, "ref-callback")) return;
       logPhase("loading", { source: "ref-callback" });
     },
-    [tryMarkReady, logPhase],
+    [displayUrl, tryMarkReady, logPhase],
   );
 
   useLayoutEffect(() => {
     const img = imgRef.current;
-    if (!img) return;
+    if (!img || !displayUrl) return;
     tryMarkReady(img, "layout-effect");
-  }, [slot.url, retry, tryMarkReady]);
+  }, [displayUrl, imgRetry, tryMarkReady]);
+
+  useEffect(() => {
+    if (!displayUrl) {
+      if (accessStatus === "error") logPhase("error", { source: "access-denied" });
+      return;
+    }
+    expiredRefreshRef.current = false;
+    logPhase("loading", { source: "url-resolved" });
+  }, [displayUrl, accessStatus, logPhase]);
 
   useEffect(() => {
     const img = imgRef.current;
-    if (!img) return;
+    if (!img || !displayUrl) return;
     const t = window.setTimeout(() => {
       if (phaseRef.current !== "loading") return;
       tryMarkReady(img, "delayed-probe-50ms");
     }, 50);
     return () => window.clearTimeout(t);
-  }, [slot.url, retry, tryMarkReady]);
-
-  useLayoutEffect(() => {
-    auditKycPreview("render-state", {
-      phase,
-      showReady: phase === "ready",
-      forceVisible: FORCE_IMG_VISIBLE,
-      url: slot.url,
-      label: slot.label,
-    });
-  });
+  }, [displayUrl, imgRetry, tryMarkReady]);
 
   const bumpRetry = useCallback(() => {
+    if (!canRetry) return;
+    expiredRefreshRef.current = false;
     logPhase("loading", { source: "retry" });
-    setRetry((n) => n + 1);
+    retry();
+    setImgRetry((n) => n + 1);
+  }, [canRetry, logPhase, retry]);
+
+  const handleImgLoad = useCallback(() => {
+    logPhase("ready", { source: "onLoad" });
   }, [logPhase]);
 
-  const handleImgLoad = useCallback(
-    (e) => {
-      const img = e.currentTarget;
-      auditKycPreview("onLoad fired", {
-        complete: img.complete,
-        naturalWidth: img.naturalWidth,
-        naturalHeight: img.naturalHeight,
-        url: slot.url,
-      });
-      logPhase("ready", { source: "onLoad" });
-    },
-    [slot.url, logPhase],
-  );
+  const handleImgError = useCallback(() => {
+    if (!expiredRefreshRef.current && canRetry) {
+      expiredRefreshRef.current = true;
+      logPhase("loading", { source: "expired-presign-refresh" });
+      refreshOnExpired();
+      setImgRetry((n) => n + 1);
+      return;
+    }
+    logPhase("error", { source: "onError" });
+  }, [canRetry, logPhase, refreshOnExpired]);
 
-  const handleImgError = useCallback(
-    (e) => {
-      const img = e.currentTarget;
-      auditKycPreview("onError fired", {
-        complete: img.complete,
-        naturalWidth: img.naturalWidth,
-        url: slot.url,
-      });
-      logPhase("error", { source: "onError" });
-    },
-    [slot.url, logPhase],
-  );
+  const accessBlocked = accessStatus === "error" && !displayUrl;
+  const accessLoading = accessStatus === "loading" || (!displayUrl && accessStatus !== "error");
 
   if (slot.kind === "pdf") {
     return (
@@ -147,20 +150,35 @@ const DocSlot = memo(function DocSlot({ slot }) {
         </div>
         <p className="kyc-doc-slot-hint">Inline preview is not available for PDF. Open in a new tab to review.</p>
         <div className="kyc-doc-slot-actions">
-          <a className="kyc-doc-slot-btn" href={slot.url} target="_blank" rel="noreferrer">
-            Open in new tab
-          </a>
-          <a className="kyc-doc-slot-btn kyc-doc-slot-btn--ghost" href={slot.url} download rel="noreferrer">
-            Download
-          </a>
+          {displayUrl ? (
+            <>
+              <a className="kyc-doc-slot-btn" href={displayUrl} target="_blank" rel="noreferrer">
+                Open in new tab
+              </a>
+              <a className="kyc-doc-slot-btn kyc-doc-slot-btn--ghost" href={displayUrl} download rel="noreferrer">
+                Download
+              </a>
+            </>
+          ) : (
+            <span className="kyc-doc-slot-hint" role="status">
+              {accessBlocked
+                ? "Document preview unavailable. Try again or refresh the application."
+                : "Loading secure link…"}
+            </span>
+          )}
+          {accessBlocked && canRetry ? (
+            <button type="button" className="kyc-doc-slot-btn" onClick={bumpRetry}>
+              Retry
+            </button>
+          ) : null}
         </div>
       </article>
     );
   }
 
-  const showBroken = phase === "error";
+  const showBroken = phase === "error" || accessBlocked;
   const showReady = phase === "ready" || FORCE_IMG_VISIBLE;
-  const showSkeleton = phase === "loading" && !FORCE_IMG_VISIBLE;
+  const showSkeleton = (phase === "loading" || accessLoading) && !FORCE_IMG_VISIBLE && !showBroken;
   const imgClassName = [
     "kyc-doc-slot-img",
     showReady ? "kyc-doc-slot-img--visible" : "",
@@ -178,35 +196,45 @@ const DocSlot = memo(function DocSlot({ slot }) {
           <div className="kyc-doc-slot-broken" role="alert">
             <span>Could not load image preview.</span>
             <div className="kyc-doc-slot-broken-actions">
-              <button type="button" className="kyc-doc-slot-btn" onClick={bumpRetry}>
-                Retry
-              </button>
-              <a className="kyc-doc-slot-btn kyc-doc-slot-btn--ghost" href={slot.url} target="_blank" rel="noreferrer">
-                Open file
-              </a>
+              {canRetry ? (
+                <button type="button" className="kyc-doc-slot-btn" onClick={bumpRetry}>
+                  Retry
+                </button>
+              ) : null}
             </div>
           </div>
         ) : null}
-        <img
-          ref={imgCallbackRef}
-          key={`${slot.id}-${retry}-${slot.url}`}
-          src={slot.url}
-          alt=""
-          loading="eager"
-          decoding="async"
-          className={imgClassName}
-          hidden={showBroken}
-          onLoad={handleImgLoad}
-          onError={handleImgError}
-        />
+        {displayUrl && !showBroken ? (
+          <img
+            ref={imgCallbackRef}
+            key={`${slot.id}-${imgRetry}-${displayUrl}`}
+            src={displayUrl}
+            alt=""
+            loading="eager"
+            decoding="async"
+            className={imgClassName}
+            onLoad={handleImgLoad}
+            onError={handleImgError}
+          />
+        ) : null}
       </div>
       <div className="kyc-doc-slot-actions">
-        <a className="kyc-doc-slot-btn" href={slot.url} target="_blank" rel="noreferrer">
-          Open in new tab
-        </a>
-        <a className="kyc-doc-slot-btn kyc-doc-slot-btn--ghost" href={slot.url} download rel="noreferrer">
-          Download
-        </a>
+        {displayUrl ? (
+          <>
+            <a className="kyc-doc-slot-btn" href={displayUrl} target="_blank" rel="noreferrer">
+              Open in new tab
+            </a>
+            <a className="kyc-doc-slot-btn kyc-doc-slot-btn--ghost" href={displayUrl} download rel="noreferrer">
+              Download
+            </a>
+          </>
+        ) : (
+          <span className="kyc-doc-slot-hint" role="status">
+            {accessBlocked
+              ? "Document preview unavailable."
+              : "Loading secure link…"}
+          </span>
+        )}
       </div>
     </article>
   );
@@ -215,20 +243,7 @@ const DocSlot = memo(function DocSlot({ slot }) {
 function kycRowDocFingerprint(row) {
   if (!row || typeof row !== "object") return "";
   const raw = row._raw && typeof row._raw === "object" ? row._raw : {};
-  const keys = [
-    "filePath",
-    "documentUrl",
-    "documentFile",
-    "imageUrl",
-    "aadhaarFrontUrl",
-    "aadhaarBackUrl",
-    "panCardUrl",
-    "selfieUrl",
-    "frontDocumentUrl",
-    "backDocumentUrl",
-    "documentFrontUrl",
-    "documentBackUrl",
-  ];
+  const keys = KYC_DOCUMENT_URL_KEYS;
   const parts = keys.map((k) => String(row[k] ?? raw[k] ?? ""));
   const docLists = ["documents", "kycDocuments", "kycDocumentUrls"].map((k) => {
     const arr = row[k] ?? raw[k];
@@ -245,28 +260,22 @@ function AdminKycDocPreviews({ row }) {
   );
 
   useEffect(() => {
-    const raw = row?._raw && typeof row._raw === "object" ? row._raw : {};
     auditKycPreview("preview slots", {
       rowId: row?.id,
       slotCount: slots.length,
-      docFields: {
-        documentUrl: row?.documentUrl ?? raw.documentUrl,
-        documentFile: row?.documentFile ?? raw.documentFile,
-        aadhaarFrontUrl: row?.aadhaarFrontUrl ?? raw.aadhaarFrontUrl,
-        frontDocumentUrl: row?.frontDocumentUrl ?? raw.frontDocumentUrl,
-      },
-      slots: slots.map((s) => ({ label: s.label, url: s.url, kind: s.kind })),
+      slots: slots.map((s) => ({ label: s.label, kind: s.kind, needsPresign: s.needsPresign })),
     });
-  }, [row?.id, slots, row]);
+  }, [row?.id, slots]);
 
   if (!slots.length) {
+    const hasRawDocs = hasKycDocumentCandidates(row);
     return (
       <section className="kyc-doc-preview-root" aria-label="KYC documents">
         <h5 className="kyc-doc-preview-heading">Verification documents</h5>
         <p className="kyc-doc-preview-empty" role="status">
-          No document URLs were returned for this application. Use backend fields such as{" "}
-          <code className="kyc-doc-preview-code">aadhaarFrontUrl</code>, <code className="kyc-doc-preview-code">panCardUrl</code>,{" "}
-          <code className="kyc-doc-preview-code">selfieUrl</code>, etc.
+          {hasRawDocs
+            ? "Documents were found but secure preview could not be prepared. Retry or refresh this application."
+            : "No document URLs were returned for this application."}
         </p>
       </section>
     );

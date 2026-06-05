@@ -76,7 +76,6 @@ export default function Login() {
       setInfoMessage(msg.trim());
       navigate(location.pathname, { replace: true, state: null });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const canSubmitLogin =
@@ -210,6 +209,7 @@ export default function Login() {
 
       if (isAuthTokenDebugEnabled()) {
         const storedBefore = localStorage.getItem("ui-access-token");
+        /* eslint-disable no-console -- VITE_DEBUG_AUTH_TOKEN DEV-only */
         console.group("[AUTH DEBUG] verify-otp → token");
         console.log("response top-level keys:", Object.keys(data || {}));
         console.log("extracted JWT (exact):", token);
@@ -217,12 +217,14 @@ export default function Login() {
         console.log("token had whitespace-only trim applied:", true);
         console.log("localStorage ui-access-token before save:", storedBefore);
         console.groupEnd();
+        /* eslint-enable no-console */
       }
 
       await onLoginSuccess({ token, userId, role });
 
       if (isAuthTokenDebugEnabled()) {
         const stored = localStorage.getItem("ui-access-token");
+        // eslint-disable-next-line no-console
         console.log("[AUTH DEBUG] after onLoginSuccess — stored === extracted:", stored === token);
         if (stored !== token) {
           console.warn("[AUTH DEBUG] token mismatch after save", {

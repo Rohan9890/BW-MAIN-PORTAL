@@ -504,6 +504,7 @@ export const adminDashboardApi = {
       import.meta.env.VITE_KYC_DETAIL_AUDIT !== "false"
     ) {
       const unwrapped = unwrapKycDetailRecord(raw, { matchId: id });
+      // eslint-disable-next-line no-console
       console.debug("[kyc-detail] getKycDetail", {
         id,
         raw,
@@ -559,6 +560,7 @@ export const adminDashboardApi = {
 /** DEV-only audit for admin app logo/banner upload responses. */
 export function logDevAppAssetUploadAudit(res, meta = {}) {
   if (!import.meta.env.DEV) return;
+  // eslint-disable-next-line no-console
   console.debug("[admin-apps] asset upload response", { res, ...meta });
 }
 

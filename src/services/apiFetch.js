@@ -77,6 +77,7 @@ export async function apiFetch(url, options = {}) {
     attachAuth &&
     mergedHeaders.Authorization
   ) {
+    /* eslint-disable no-console -- VITE_DEBUG_AUTH_TOKEN DEV-only */
     console.group("[AUTH DEBUG] outgoing GET /profile");
     console.log("Authorization header (exact full string):", mergedHeaders.Authorization);
     console.log("Bearer JWT only (exact):", token);
@@ -88,6 +89,7 @@ export async function apiFetch(url, options = {}) {
       "Backend header format: standard `Authorization: Bearer <JWT>` (RFC 6750); same token returns 200 from server curl per backend docs.",
     );
     console.groupEnd();
+    /* eslint-enable no-console */
   }
 
   const profileVerbose =
@@ -97,12 +99,14 @@ export async function apiFetch(url, options = {}) {
 
   if (profileVerbose) {
     const t = token ? String(token).trim() : "";
+    /* eslint-disable no-console -- VITE_DEBUG_PROFILE DEV-only */
     console.group("[profile] apiFetch — verbose (VITE_DEBUG_PROFILE)");
     console.log("path:", url, "→", requestUrl);
     console.log("token in localStorage:", Boolean(t), "| length:", t.length);
     console.log("attachAuth:", attachAuth, "| publicPath:", publicPath);
     console.log("full request headers:", { ...mergedHeaders });
     console.groupEnd();
+    /* eslint-enable no-console */
   }
 
   const res = await fetch(requestUrl, {
@@ -133,6 +137,7 @@ export async function apiFetch(url, options = {}) {
   }
 
   if (profileVerbose) {
+    /* eslint-disable no-console -- VITE_DEBUG_PROFILE DEV-only */
     console.log("[profile] response status:", res.status, res.statusText);
     try {
       const raw = await res.clone().text();
@@ -143,6 +148,7 @@ export async function apiFetch(url, options = {}) {
     } catch (readErr) {
       console.warn("[profile] could not read response body:", readErr);
     }
+    /* eslint-enable no-console */
   }
 
   const otpLike =
