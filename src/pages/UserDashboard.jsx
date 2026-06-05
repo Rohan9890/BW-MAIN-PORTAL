@@ -1257,7 +1257,7 @@ export default function UserDashboard() {
     )
       .then((body) => {
         if (usageDataCacheRef.current.get(cacheKey)) return;
-        const normalized = normalizeUsageTimeseriesPayload(body, granularity);
+        const normalized = normalizeUsageTimeseriesPayload(body, granularity, range);
         if (normalized.length > 0) {
           usageDataCacheRef.current.set(cacheKey, normalized);
         }
@@ -1313,14 +1313,15 @@ export default function UserDashboard() {
           console.log("Usage API response:", body);
         }
         if (gen !== usageFetchGenRef.current) return;
-        const normalized = normalizeUsageTimeseriesPayload(body, granularity);
+        const normalized = normalizeUsageTimeseriesPayload(
+          body,
+          granularity,
+          usageRange,
+        );
         if (normalized.length > 0) {
           usageDataCacheRef.current.set(cacheKey, normalized);
         }
-        console.log("Usage API response:", body);
-        console.log("Normalized chart rows:", normalized);
         setUsageSeriesRows(normalized);
-        console.log("NORMALIZED CHART DATA", normalized);
         setUsageChartError("");
       })
       .catch((err) => {
