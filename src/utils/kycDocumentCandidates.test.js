@@ -3,6 +3,7 @@ import {
   hasKycDocumentCandidates,
   pickPrimaryKycDocumentStoredUrl,
   resolveKycDocumentCandidates,
+  isPlausibleKycDocumentStoredUrl,
 } from "./kycDocumentCandidates";
 
 const PRIVATE_S3 =
@@ -91,4 +92,78 @@ describe("resolveKycDocumentCandidates", () => {
       }),
     ).toBe(PRIVATE_S3);
   });
+
+  describe("pickPrimaryKycDocumentStoredUrl reupload and dedup logic", () => {
+    const original = "https://authify-kyc-prod.s3.ap-south-1.amazonaws.com/kyc/original.jpg";
+    const reupload = "https://authify-kyc-prod.s3.ap-south-1.amazonaws.com/kyc/reupload.jpg";
+
+    it("original upload: returns aadhaarFrontUrl when frontDocumentUrl is not present", () => {
+      const result = pickPrimaryKycDocumentStoredUrl({
+        aadhaarFrontUrl: original,
+        aadhaarBackUrl: original,
+      });
+      expect(result).toBe(original);
+    });
+
+    it("reupload: returns frontDocumentUrl when frontDocumentUrl differs from aadhaarFrontUrl", () => {
+      const result = pickPrimaryKycDocumentStoredUrl({
+        aadhaarFrontUrl: original,
+        aadhaarBackUrl: original,
+        frontDocumentUrl: reupload,
+        backDocumentUrl: reupload,
+      });
+      expect(result).toBe(reupload);
+    });
+
+    it("duplicate front/back: returns original when both are identical", () => {
+      const result = pickPrimaryKycDocumentStoredUrl({
+        aadhaarFrontUrl: original,
+        frontDocumentUrl: original,
+      });
+      expect(result).toBe(original);
+    });
+
+    it("presigned dedup: returns original when frontDocumentUrl and aadhaarFrontUrl point to the same object with different presigned signatures", () => {
+      const originalPresigned1 = `${original}?X-Amz-Signature=sig1`;
+      const originalPresigned2 = `${original}?X-Amz-Signature=sig2`;
+      const result = pickPrimaryKycDocumentStoredUrl({
+        aadhaarFrontUrl: originalPresigned1,
+        frontDocumentUrl: originalPresigned2,
+      });
+      expect(result).toBe(originalPresigned1);
+    });
+  });
+
+  describe("isPlausibleKycDocumentStoredUrl protocol validation", () => {
+    it("allows valid https S3 URL", () => {
+      expect(
+        isPlausibleKycDocumentStoredUrl(
+          "https://authify-kyc-prod.s3.ap-south-1.amazonaws.com/kyc/doc.jpg"
+        )
+      ).toBe(true);
+    });
+
+    it("allows valid local upload path", () => {
+      expect(isPlausibleKycDocumentStoredUrl("/uploads/documents/pan.png")).toBe(true);
+      expect(isPlausibleKycDocumentStoredUrl("uploads/documents/pan.png")).toBe(true);
+    });
+
+    it("rejects javascript payload", () => {
+      expect(isPlausibleKycDocumentStoredUrl("javascript:alert(1)//")).toBe(false);
+    });
+
+    it("rejects malformed protocol", () => {
+      expect(isPlausibleKycDocumentStoredUrl("malformed://foo")).toBe(false);
+      expect(isPlausibleKycDocumentStoredUrl("data:image/png;base64,abc")).toBe(false);
+      expect(isPlausibleKycDocumentStoredUrl("file:///C:/path")).toBe(false);
+    });
+
+    it("rejects empty/null/undefined values", () => {
+      expect(isPlausibleKycDocumentStoredUrl("")).toBe(false);
+      expect(isPlausibleKycDocumentStoredUrl(null)).toBe(false);
+      expect(isPlausibleKycDocumentStoredUrl(undefined)).toBe(false);
+    });
+  });
 });
+
+

@@ -97,6 +97,38 @@ export const KYC_DOCUMENT_FIELD_SPECS = [
 export const KYC_DOCUMENT_URL_KEYS = KYC_DOCUMENT_FIELD_SPECS.map((s) => s.key);
 
 /**
+ * Generic URL catch-all fields that accumulate "whatever was uploaded" and may
+ * contain stale uploads from an earlier session. Specific typed fields take
+ * priority in admin preview; these are only used when no typed field is present.
+ */
+export const KYC_GENERIC_FALLBACK_KEYS = new Set(["documentUrl", "documentFile", "filePath"]);
+
+/**
+ * Matches the stale-word as a distinct token when surrounded by filename separators
+ * (hyphen, underscore, dot, space) or start/end of the filename string.
+ * Avoids false positives on filenames like "latest.jpg", "protest.pdf", "contest.jpg".
+ */
+
+const STALE_FILENAME_WORDS = new Set(["test", "sample", "placeholder", "demo", "dummy"]);
+
+/**
+ * True when the URL's filename looks like a test/demo/placeholder asset that
+ * should never appear in admin document previews.
+ * Only inspects the filename segment (before the query string).
+ * @param {string} url
+ * @returns {boolean}
+ */
+export function isStaleTestAssetUrl(url) {
+  const s = safeStr(url);
+  if (!s) return false;
+  const withoutQuery = s.split("?")[0];
+  const filename = withoutQuery.split("/").pop() || "";
+  // Strip file extension, split on common filename separators, and check each token.
+  const name = filename.replace(/\.[^.]*$/, "").toLowerCase();
+  return name.split(/[-_.\s]+/).some((token) => STALE_FILENAME_WORDS.has(token));
+}
+
+/**
  * @param {object} record
  * @returns {object[]}
  */
@@ -156,6 +188,12 @@ function dedupeStoredUrlKey(storedUrl) {
 export function isPlausibleKycDocumentStoredUrl(storedUrl) {
   const s = safeStr(storedUrl);
   if (!s) return false;
+
+  // Explicitly reject dangerous or unsupported protocols
+  if (/^(?:[a-z0-9.+-]+:|\/\/)/i.test(s) && !/^https?:\/\//i.test(s)) {
+    return false;
+  }
+
   if (isS3KycDocumentUrl(s)) return true;
   if (/^https?:\/\//i.test(s)) return true;
   if (/^\/uploads\//i.test(s)) return true;
@@ -232,12 +270,51 @@ export function hasKycDocumentCandidates(record) {
   return resolveKycDocumentCandidates(record).length > 0;
 }
 
+/**
+ * Normalize a URL for dedup comparison: strip query string, trim, lowercase.
+ * Handles presigned S3 URLs (same object, different X-Amz-Signature / expiry),
+ * CDN URLs with cache-busters, and any incidental query params.
+ * The original URL is always preserved for actual requests — this is for keying only.
+ * @param {string} url
+ * @returns {string}
+ */
+export function normalizeUrlForDedup(url) {
+  const s = safeStr(url);
+  if (!s) return "";
+  return s.split("?")[0].trim().toLowerCase();
+}
+
 /** Primary stored URL for user profile download/preview. */
 export function pickPrimaryKycDocumentStoredUrl(record) {
+  const nodes = collectKycSourceNodes(record);
+  const effectiveFrontDocUrl = pickFieldFromNodes(
+    nodes,
+    "frontDocumentUrl",
+    ["frontUrl", "documentFrontUrl", "idFrontUrl", "frontImageUrl", "documentFront", "document_front"]
+  );
+  const effectiveAadhaarFrontUrl = pickFieldFromNodes(
+    nodes,
+    "aadhaarFrontUrl",
+    ["aadhaar_front_url"]
+  );
+
+  const isReupload =
+    Boolean(effectiveFrontDocUrl) &&
+    Boolean(effectiveAadhaarFrontUrl) &&
+    normalizeUrlForDedup(effectiveFrontDocUrl) !== normalizeUrlForDedup(effectiveAadhaarFrontUrl);
+
+  if (isReupload) {
+    return effectiveFrontDocUrl;
+  }
+
   return resolveKycDocumentCandidates(record)[0]?.storedUrl || "";
 }
 
 /** @param {object} record */
 export function pickPrimaryKycDocumentCandidate(record) {
-  return resolveKycDocumentCandidates(record)[0] || null;
+  const primaryUrl = pickPrimaryKycDocumentStoredUrl(record);
+  if (!primaryUrl) return null;
+  const candidates = resolveKycDocumentCandidates(record);
+  return candidates.find((c) => c.storedUrl === primaryUrl) || null;
 }
+

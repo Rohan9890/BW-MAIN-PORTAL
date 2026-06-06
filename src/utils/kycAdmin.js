@@ -1,12 +1,13 @@
 import {
   KYC_DOCUMENT_URL_KEYS,
+  isStaleTestAssetUrl,
+  normalizeUrlForDedup,
   pickPrimaryKycDocumentStoredUrl,
   resolveKycDocumentCandidates,
 } from "./kycDocumentCandidates";
 import {
   isPresignedS3Url,
   isPrivateS3DocumentUrl,
-  isS3KycDocumentUrl,
   resolveKycDocumentUrl,
 } from "./mediaUrl";
 
@@ -458,11 +459,39 @@ export function normalizeUserKycMePayload(raw) {
   };
 }
 
+
 /**
- * Ordered document slots for admin preview (dedupes identical URLs).
- * Shows latest active document and, when applicable, the immediate previous rejected version only.
+ * Admin-preview field priority — differs from the global KYC_DOCUMENT_FIELD_SPECS order.
+ *
+ * This backend writes the current resubmission into frontDocumentUrl / backDocumentUrl
+ * on every KYC reupload. The typed Aadhaar fields (aadhaarFrontUrl / aadhaarBackUrl)
+ * retain the ORIGINAL first upload and must be treated as "previous submission" context.
+ *
+ * By listing frontDocumentUrl / backDocumentUrl FIRST, the current document always
+ * occupies slot 1. The typed Aadhaar fields can only appear as slot 2 (previous).
+ */
+const ADMIN_PREVIEW_KEY_PRIORITY = new Map(
+  [
+    "frontDocumentUrl",
+    "backDocumentUrl",
+    "panCardUrl",
+    "passportUrl",
+    "drivingLicenseUrl",
+    "aadhaarFrontUrl",
+    "aadhaarBackUrl",
+    "selfieUrl",
+    "livePhotoUrl",
+    "documentUrl",
+    "documentFile",
+    "filePath",
+  ].map((k, i) => [k, i]),
+);
+
+/**
+ * Ordered document slots for admin preview — shows current document and, when
+ * applicable, the immediately previous submission only (max 2 cards total).
  * @param {ReturnType<typeof normalizeAdminKycRow> | object} row
- * @returns {{ id: string, label: string, url: string, kind: "image"|"pdf" }[]}
+ * @returns {{ id: string, label: string, url: string, needsPresign: boolean, kind: "image"|"pdf" }[]}
  */
 export function getAdminKycDocumentPreviewSlots(row) {
   if (!row || typeof row !== "object") return [];
@@ -486,15 +515,68 @@ export function getAdminKycDocumentPreviewSlots(row) {
     canonicalStatus === KYC_CANONICAL.REJECTED ||
     canonicalStatus === KYC_CANONICAL.REUPLOAD_REQUIRED;
 
-  /** @type {{ id: string, label: string, url: string, kind: "image"|"pdf" }[]} */
+  /** @type {{ id: string, label: string, url: string, needsPresign: boolean, kind: "image"|"pdf" }[]} */
   const out = [];
 
   if (fieldCandidates.length) {
-    for (const candidate of fieldCandidates.slice(0, 6)) {
+    // Re-sort by admin-preview priority so frontDocumentUrl (current resubmission)
+    // comes before aadhaarFrontUrl (original typed field, potentially stale).
+    const sorted = [...fieldCandidates].sort(
+      (a, b) =>
+        (ADMIN_PREVIEW_KEY_PRIORITY.get(a.key) ?? 99) -
+        (ADMIN_PREVIEW_KEY_PRIORITY.get(b.key) ?? 99),
+    );
+
+    // Remove test/demo/placeholder assets that should never appear in admin previews.
+    const staleFiltered = sorted.filter((c) => !isStaleTestAssetUrl(c.storedUrl));
+
+    /**
+     * Second-pass dedup by normalized base URL (strip query string, lowercase).
+     *
+     * resolveKycDocumentCandidates already dedupes by canonical path for S3 URLs,
+     * but may miss non-S3 / CDN URLs with differing query strings, and presigned
+     * URLs for the same object generated at different times (different X-Amz-Signature
+     * values). This pass catches all remaining duplicates uniformly.
+     */
+    const seen = new Set();
+    const unique = [];
+    for (const c of staleFiltered) {
+      const normKey = normalizeUrlForDedup(c.storedUrl);
+      if (!normKey || seen.has(normKey)) continue;
+      seen.add(normKey);
+      unique.push(c);
+    }
+
+    /**
+     * Reupload detection: the backend explicitly populates both frontDocumentUrl
+     * (current resubmission) AND aadhaarFrontUrl (original upload) with DIFFERENT
+     * URLs when a user reuploads. In that case:
+     *   - slot 1 is always shown (current document)
+     *   - slot 2 (original/previous) is only shown when the admin is actively
+     *     reviewing a rejection or reupload-required case (allowPreviousRejected).
+     *
+     * When isReupload is false (original submission or both fields share the same URL),
+     * both slots are always shown — e.g., front + back sides of the current document.
+     */
+    const effectiveFrontDocUrl =
+      safeStr(row.frontDocumentUrl) || safeStr(raw?.frontDocumentUrl);
+    const effectiveAadhaarFrontUrl =
+      safeStr(row.aadhaarFrontUrl) || safeStr(raw?.aadhaarFrontUrl);
+    const isReupload =
+      Boolean(effectiveFrontDocUrl) &&
+      Boolean(effectiveAadhaarFrontUrl) &&
+      normalizeUrlForDedup(effectiveFrontDocUrl) !== normalizeUrlForDedup(effectiveAadhaarFrontUrl);
+
+    const maxSlots = isReupload && !allowPreviousRejected ? 1 : 2;
+
+    for (const candidate of unique.slice(0, maxSlots)) {
       const slot = toPreviewSlot(candidate.label, candidate.storedUrl, candidate.key);
       if (slot) out.push(slot);
     }
-    if (out.length) return out;
+    // Always return from the field-candidates branch — even when out is empty.
+    // Prevents stale-filtered URLs from reappearing through the primary-URL
+    // fallback below (resolvePrimaryDocumentUrl re-reads the same fields).
+    return out;
   }
 
   if (sortedEntries.length) {

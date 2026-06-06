@@ -32,11 +32,11 @@ export default function DashboardLayout() {
 
   const handleNotificationClick = () => {
     setShowPopup(false);
-    setShowNotifications((prev) => {
-      const next = !prev;
-      if (next) void refresh({ force: true });
-      return next;
-    });
+    const next = !showNotifications;
+    setShowNotifications(next);
+    if (next) {
+      void refresh({ force: true });
+    }
   };
 
   useEffect(() => {

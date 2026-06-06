@@ -155,7 +155,6 @@ export default function Profile() {
         if (cancelled) return;
         setKyc(normalizeUserKycMePayload(kycRes) || kycRes || null);
         setKycError("");
-        await fetchProfile();
       } catch (e) {
         if (cancelled) return;
         // Keep current UI; only surface if we never loaded KYC before.
@@ -400,27 +399,24 @@ export default function Profile() {
       return;
     }
 
-    if (kycNeedsReupload) {
-      const documentType = normalizeKycDocumentType(kycReuploadDocType);
-      const documentNumber = String(kycReuploadDocNumber || "").trim();
-      const validationError = validateKycReuploadFields(
-        documentType,
-        documentNumber,
-      );
-      if (validationError) {
-        showError(validationError);
-        return;
-      }
+    const documentType = kycNeedsReupload
+      ? normalizeKycDocumentType(kycReuploadDocType)
+      : normalizeKycDocumentType(kycDocType);
+    const documentNumber = kycNeedsReupload
+      ? String(kycReuploadDocNumber || "").trim()
+      : String(kycDocNumber || "").trim();
+
+    const validationError = validateKycReuploadFields(
+      documentType,
+      documentNumber,
+    );
+    if (validationError) {
+      showError(validationError);
+      return;
     }
 
     setKycUploading(true);
     try {
-      const documentType = kycNeedsReupload
-        ? normalizeKycDocumentType(kycReuploadDocType)
-        : normalizeKycDocumentType(kycDocType);
-      const documentNumber = kycNeedsReupload
-        ? String(kycReuploadDocNumber || "").trim()
-        : String(kycDocNumber || "").trim();
       const fd = buildKycUploadFormData({
         file,
         documentType,

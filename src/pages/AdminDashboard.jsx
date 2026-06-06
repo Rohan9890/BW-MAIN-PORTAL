@@ -1648,6 +1648,16 @@ export default function AdminDashboard() {
         bumpAdminUsersAfterKycModeration();
         invalidateDashboardData("admin-kyc-approved");
         showSuccess("KYC approved");
+        setKycDrawerRow((prev) => {
+          if (!prev || String(prev.id) !== String(row.id)) return prev;
+          return {
+            ...prev,
+            canonicalStatus: KYC_CANONICAL.VERIFIED,
+            displayStatus: kycCanonicalLabel(KYC_CANONICAL.VERIFIED),
+            status: "VERIFIED",
+            statusRaw: "VERIFIED",
+          };
+        });
       } catch (e) {
         showApiErrorToast("Failed to approve KYC", e);
       } finally {
@@ -1689,6 +1699,17 @@ export default function AdminDashboard() {
       showSuccess("KYC rejected");
       setKycRejectFor(null);
       setKycRejectReasonDraft("");
+      setKycDrawerRow((prev) => {
+        if (!prev || String(prev.id) !== String(row.id)) return prev;
+        return {
+          ...prev,
+          canonicalStatus: KYC_CANONICAL.REJECTED,
+          displayStatus: kycCanonicalLabel(KYC_CANONICAL.REJECTED),
+          status: "REJECTED",
+          statusRaw: "REJECTED",
+          rejectionReason: reason,
+        };
+      });
     } catch (e) {
       showApiErrorToast("Failed to reject KYC", e);
     } finally {
@@ -1712,6 +1733,17 @@ export default function AdminDashboard() {
       showSuccess("Re-upload requested");
       setKycReuploadFor(null);
       setKycReuploadNoteDraft("");
+      setKycDrawerRow((prev) => {
+        if (!prev || String(prev.id) !== String(row.id)) return prev;
+        return {
+          ...prev,
+          canonicalStatus: KYC_CANONICAL.REUPLOAD_REQUIRED,
+          displayStatus: kycCanonicalLabel(KYC_CANONICAL.REUPLOAD_REQUIRED),
+          status: "REUPLOAD_REQUIRED",
+          statusRaw: "REUPLOAD_REQUIRED",
+          ...(note ? { rejectionReason: note } : {}),
+        };
+      });
     } catch (e) {
       const st = e?.status;
       if (st === 404 || st === 405) {
@@ -1738,6 +1770,16 @@ export default function AdminDashboard() {
         await reloadKycList();
         invalidateDashboardData("admin-kyc-under-review");
         showSuccess("Marked under review");
+        setKycDrawerRow((prev) => {
+          if (!prev || String(prev.id) !== String(row.id)) return prev;
+          return {
+            ...prev,
+            canonicalStatus: KYC_CANONICAL.UNDER_REVIEW,
+            displayStatus: kycCanonicalLabel(KYC_CANONICAL.UNDER_REVIEW),
+            status: "UNDER_REVIEW",
+            statusRaw: "UNDER_REVIEW",
+          };
+        });
       } catch (e) {
         const st = e?.status;
         if (st === 404 || st === 405) {
