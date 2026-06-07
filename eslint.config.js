@@ -1,5 +1,6 @@
 import js from "@eslint/js";
 import globals from "globals";
+import reactPlugin from "eslint-plugin-react";
 
 const isProduction =
   process.env.NODE_ENV === "production" || process.env.ESLINT_PROD === "true";
@@ -18,6 +19,8 @@ export default [
   js.configs.recommended,
   {
     files: ["src/**/*.{js,jsx}"],
+    plugins: { react: reactPlugin },
+    settings: { react: { version: "detect" } },
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
@@ -30,6 +33,12 @@ export default [
       },
     },
     rules: {
+      /**
+       * Mark variables referenced in JSX as "used" so that no-unused-vars
+       * does not raise false positives for component imports used only in JSX
+       * (e.g. <Suspense>, <Route>, <Toaster>).
+       */
+      "react/jsx-uses-vars": "error",
       "no-console": isProduction
         ? ["error", { allow: ["warn", "error"] }]
         : ["warn", { allow: ["warn", "error"] }],

@@ -1,4 +1,3 @@
-/* eslint-disable no-unused-vars */
 import { Suspense, lazy } from "react";
 import { Navigate, Routes, Route } from "react-router-dom";
 import { Toaster } from "react-hot-toast";
