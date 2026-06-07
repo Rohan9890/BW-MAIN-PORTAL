@@ -64,6 +64,49 @@ export function getKycFormDataFieldNames(formData) {
 }
 
 /**
+ * Strict file validation for size, mime-type, and extension checks.
+ * Allows only: image/jpeg, image/png, application/pdf
+ * Rejects size > 5MB
+ * Rejects executable/script/svg formats.
+ * @param {Blob} file
+ */
+export function validateKycFile(file) {
+  if (!(file instanceof Blob)) {
+    throw new KycUploadValidationError("Choose a document file to upload.");
+  }
+
+  const MAX_SIZE = 5 * 1024 * 1024; // 5MB
+  if (file.size > MAX_SIZE) {
+    throw new KycUploadValidationError("File size exceeds the 5MB limit.");
+  }
+  if (file.size <= 0) {
+    throw new KycUploadValidationError("Choose a document file to upload.");
+  }
+
+  const ALLOWED_MIME_TYPES = ["image/jpeg", "image/png", "application/pdf"];
+  if (file.type && !ALLOWED_MIME_TYPES.includes(file.type)) {
+    throw new KycUploadValidationError("Unsupported file format. Only JPEG, PNG, and PDF are allowed.");
+  }
+
+  if (file.name) {
+    const parts = file.name.split(".");
+    if (parts.length < 2) {
+      throw new KycUploadValidationError("File name must have an extension.");
+    }
+    const ext = parts.pop().toLowerCase();
+    const BANNED_EXTENSIONS = ["exe", "bat", "cmd", "sh", "js", "svg", "svgz", "htm", "html", "php", "py", "pl", "rb"];
+    if (BANNED_EXTENSIONS.includes(ext)) {
+      throw new KycUploadValidationError("Executable, script, or SVG formats are strictly prohibited.");
+    }
+
+    const ALLOWED_EXTENSIONS = ["jpg", "jpeg", "png", "pdf"];
+    if (!ALLOWED_EXTENSIONS.includes(ext)) {
+      throw new KycUploadValidationError("Unsupported file format. Only JPEG, PNG, and PDF are allowed.");
+    }
+  }
+}
+
+/**
  * @param {FormData} formData
  */
 export function assertKycMultipartFormData(formData) {
@@ -81,6 +124,8 @@ export function assertKycMultipartFormData(formData) {
     if (field === "file") {
       if (!(value instanceof Blob) || value.size <= 0) {
         missing.push("file (empty)");
+      } else {
+        validateKycFile(value);
       }
       continue;
     }
@@ -110,6 +155,8 @@ export function buildKycUploadFormData({ file, documentType, documentNumber }) {
   if (!(file instanceof Blob) || file.size <= 0) {
     throw new KycUploadValidationError("Choose a document file to upload.");
   }
+
+  validateKycFile(file);
 
   const formData = new FormData();
   formData.append("documentType", type);
