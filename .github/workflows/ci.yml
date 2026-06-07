@@ -38,4 +38,6 @@ jobs:
         run: npm run lint:prod
 
       - name: Build Project
+        env:
+          VITE_API_URL: ${{ secrets.VITE_API_URL }}
         run: npm run build
