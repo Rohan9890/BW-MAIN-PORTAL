@@ -661,11 +661,6 @@ export default function Profile() {
           </div>
 
           <div className="pf-hero-right">
-            <div className="pf-badges">
-              <span className={`pf-badge pf-badge--${accountBadge.tone}`}>{accountBadge.label}</span>
-              <span className={`pf-badge pf-badge--${kycBadge.tone}`}>{kycBadge.label}</span>
-            </div>
-
             <div className="pf-hero-actions">
               {!editMode ? (
                 <button type="button" className="pf-btn pf-btn--ghost" onClick={() => setEditMode(true)}>

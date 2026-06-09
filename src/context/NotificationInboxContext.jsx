@@ -30,6 +30,7 @@ export function NotificationInboxProvider({ children }) {
   const [retrying, setRetrying] = useState(false);
   const [error, setError] = useState("");
   const cacheRef = useRef({ at: 0, rows: null });
+  const inFlightMutationRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -69,6 +70,10 @@ export function NotificationInboxProvider({ children }) {
         setUnreadCount(0);
         setError("");
         cacheRef.current = { at: 0, rows: null };
+        return;
+      }
+
+      if (inFlightMutationRef.current) {
         return;
       }
 
@@ -176,15 +181,21 @@ export function NotificationInboxProvider({ children }) {
       let wasUnread = false;
       setNotifications((prev) => {
         wasUnread = prev.some((row) => row.id === id && !row.read);
-        return prev.map((row) => (row.id === id ? { ...row, read: true } : row));
+        const next = prev.map((row) => (row.id === id ? { ...row, read: true } : row));
+        cacheRef.current = { at: Date.now(), rows: next };
+        return next;
       });
       if (wasUnread) setUnreadCount((c) => Math.max(0, Number(c) - 1));
+      
+      inFlightMutationRef.current = true;
       try {
         await notificationsBackend.markRead(id);
         invalidateDashboardData("notification-mark-read");
       } catch (e) {
         showError(e?.message || "Failed to mark as read");
         void refresh({ force: true, silent: true });
+      } finally {
+        inFlightMutationRef.current = false;
       }
     },
     [refresh],
@@ -196,15 +207,21 @@ export function NotificationInboxProvider({ children }) {
       setNotifications((prev) => {
         const hit = prev.find((n) => n.id === id);
         wasUnread = Boolean(hit && !hit.read);
-        return prev.filter((n) => n.id !== id);
+        const next = prev.filter((n) => n.id !== id);
+        cacheRef.current = { at: Date.now(), rows: next };
+        return next;
       });
       if (wasUnread) setUnreadCount((c) => Math.max(0, Number(c) - 1));
+      
+      inFlightMutationRef.current = true;
       try {
         await notificationsBackend.deleteById(id);
         invalidateDashboardData("notification-delete");
       } catch (err) {
         showError(err?.message || "Could not remove notification");
         void refresh({ force: true, silent: true });
+      } finally {
+        inFlightMutationRef.current = false;
       }
     },
     [refresh],
@@ -212,20 +229,31 @@ export function NotificationInboxProvider({ children }) {
 
   const markAllRead = useCallback(async () => {
     if (!notifications.some((n) => !n.read)) return;
+    
+    inFlightMutationRef.current = true;
+    const prevNotifications = notifications;
+    const prevUnreadCount = unreadCount;
+
+    // Optimistic UI updates
+    const next = notifications.map((item) => ({ ...item, read: true }));
+    setNotifications(next);
+    setUnreadCount(0);
+    cacheRef.current = { at: Date.now(), rows: next };
+
     try {
       await notificationsBackend.readAll();
-      setNotifications((prev) => {
-        const next = prev.map((item) => ({ ...item, read: true }));
-        cacheRef.current = { at: Date.now(), rows: next };
-        return next;
-      });
-      setUnreadCount(0);
       invalidateDashboardData("notification-read-all");
       showSuccess("All caught up");
     } catch (e) {
+      // Rollback on failure
+      setNotifications(prevNotifications);
+      setUnreadCount(prevUnreadCount);
+      cacheRef.current = { at: Date.now(), rows: prevNotifications };
       showError(e?.message || "Could not mark all as read");
+    } finally {
+      inFlightMutationRef.current = false;
     }
-  }, [notifications]);
+  }, [notifications, unreadCount]);
 
   const value = useMemo(
     () => ({

@@ -104,8 +104,20 @@ export const dashboardApi = {
       favoritesBackend.list().catch(() => []),
     ]);
 
-    const txns = Array.isArray(txPage?.content) ? txPage.content : [];
-    const appsList = Array.isArray(apps) ? apps : [];
+    const txns = Array.isArray(txPage)
+      ? txPage
+      : Array.isArray(txPage?.content)
+        ? txPage.content
+        : Array.isArray(txPage?.data)
+          ? txPage.data
+          : [];
+    const appsList = Array.isArray(apps)
+      ? apps
+      : Array.isArray(apps?.content)
+        ? apps.content
+        : Array.isArray(apps?.apps)
+          ? apps.apps
+          : [];
     const myList = Array.isArray(myApps) ? myApps : [];
     const favIds = new Set(
       (Array.isArray(favs) ? favs : [])

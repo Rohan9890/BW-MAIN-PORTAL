@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useBrand } from "../context/BrandContext";
 import { getInitials, useAuth } from "../context/AuthContext";
 import { useNotificationInbox } from "../context/NotificationInboxContext";
+import { extractProfilePhotoFromPayload, resolveProfilePhotoUrl } from "../utils/mediaUrl";
 
 export default function DashboardLayout() {
   const { brand, defaultBrand } = useBrand();
@@ -24,6 +25,8 @@ export default function DashboardLayout() {
   } = useNotificationInbox();
   const path = location.pathname;
   const initials = getInitials(profile?.name || "User");
+  const rawPhoto = extractProfilePhotoFromPayload(profile);
+  const profilePhotoUrl = rawPhoto ? resolveProfilePhotoUrl(rawPhoto) : "";
 
   const handleAvatarClick = () => {
     setShowNotifications(false);
@@ -539,6 +542,7 @@ export default function DashboardLayout() {
                 transition: "all 0.2s ease",
                 letterSpacing: "0.5px",
                 userSelect: "none",
+                overflow: "hidden",
               }}
               onClick={handleAvatarClick}
               role="button"
@@ -552,7 +556,24 @@ export default function DashboardLayout() {
               aria-label="User menu"
               aria-expanded={showPopup}
             >
-              {initials}
+              {profilePhotoUrl ? (
+                <img
+                  src={profilePhotoUrl}
+                  alt={profile?.name || "User"}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    borderRadius: "50%",
+                  }}
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                  }}
+                />
+              ) : null}
+              <span className="avatar-initials-fallback" style={{ display: profilePhotoUrl ? "none" : "inline" }}>
+                {initials}
+              </span>
               {showPopup && (
                 <div
                   style={{
@@ -590,9 +611,23 @@ export default function DashboardLayout() {
                         fontWeight: 700,
                         fontSize: 12,
                         marginBottom: 8,
+                        overflow: "hidden",
                       }}
                     >
-                      {initials}
+                      {profilePhotoUrl ? (
+                        <img
+                          src={profilePhotoUrl}
+                          alt={profile?.name || "User"}
+                          style={{
+                            width: "100%",
+                            height: "100%",
+                            objectFit: "cover",
+                            borderRadius: "50%",
+                          }}
+                        />
+                      ) : (
+                        initials
+                      )}
                     </div>
                     <div
                       style={{

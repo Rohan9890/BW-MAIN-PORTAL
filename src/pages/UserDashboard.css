@@ -70,7 +70,7 @@
 .ud-header-name {
   font-size: 17px;
   font-weight: 800;
-  color: #0f172a;
+  color: var(--primary);
   letter-spacing: -0.35px;
 }
 

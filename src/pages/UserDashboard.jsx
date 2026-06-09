@@ -24,6 +24,7 @@ import { getUsageTimeseriesCache } from "../services/usageTimeseriesCache";
 import { DASHBOARD_INVALIDATE_EVENT, invalidateDashboardData } from "../services/dashboardInvalidate";
 import { announcementsApi } from "../services/announcementsApi";
 import { announcementWhatsNewItem } from "../utils/announcements";
+import { extractProfilePhotoFromPayload, resolveProfilePhotoUrl } from "../utils/mediaUrl";
 import { onAppsCatalogChanged, onMyAppsChanged } from "../services/uiEvents";
 import { extractApiArrayAndMeta, peelRepeatedApiEnvelope } from "../utils/apiEnvelope";
 import {
@@ -650,6 +651,8 @@ export default function UserDashboard() {
   const initialDashboardLoadDoneRef = useRef(false);
   const lastCatalogCountRef = useRef(0);
   const query = search.trim().toLowerCase();
+  const rawPhoto = extractProfilePhotoFromPayload(profile);
+  const profilePhotoUrl = rawPhoto ? resolveProfilePhotoUrl(rawPhoto) : "";
 
   const loadDashboardData = useCallback(async (options = {}) => {
     const { silent = false, force = false } = options;
@@ -1554,8 +1557,26 @@ export default function UserDashboard() {
               className="ud-header-avatar"
               onClick={() => setShowAvatarMenu((v) => !v)}
               title="Account"
+              style={{ overflow: "hidden" }}
             >
-              {getInitials(profile?.name || "User")}
+              {profilePhotoUrl ? (
+                <img
+                  src={profilePhotoUrl}
+                  alt={profile?.name || "User"}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    borderRadius: "50%",
+                  }}
+                  onError={(e) => {
+                    e.currentTarget.style.display = "none";
+                  }}
+                />
+              ) : null}
+              <span style={{ display: profilePhotoUrl ? "none" : "inline" }}>
+                {getInitials(profile?.name || "User")}
+              </span>
             </button>
             {showAvatarMenu && (
               <div className="ud-avatar-popup">

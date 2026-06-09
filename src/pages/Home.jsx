@@ -278,12 +278,16 @@ export default function Home() {
     );
   }
 
-  const handleSearchSubmit = (event) => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
+  const executeSearch = () => {
     if (!searchResults.length) return;
     navigate(searchResults[0].route);
     setSearch("");
+  };
+
+  const handleSearchSubmit = (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    executeSearch();
   };
 
   const handleSearchItemClick = (route) => {
@@ -488,12 +492,14 @@ export default function Home() {
               viewBox="0 0 24 24"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
+              onClick={executeSearch}
               style={{
                 position: "absolute",
                 left: 14,
                 color: "#94a3b8",
-                pointerEvents: "none",
+                cursor: "pointer",
                 flexShrink: 0,
+                zIndex: 10,
               }}
             >
               <circle

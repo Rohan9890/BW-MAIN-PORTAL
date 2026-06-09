@@ -11,6 +11,7 @@ import { useBrand } from "../context/BrandContext";
 import { getInitials, useAuth } from "../context/AuthContext";
 import { useNotificationInbox } from "../context/NotificationInboxContext";
 import { adminDashboardApi } from "../services/adminDashboardApi";
+import { extractProfilePhotoFromPayload, resolveProfilePhotoUrl } from "../utils/mediaUrl";
 import { invalidateDashboardData } from "../services/dashboardInvalidate";
 import { showError, showSuccess } from "../services/toast";
 import {
@@ -830,7 +831,9 @@ export default function AdminDashboard() {
   }, []);
 
   const { brand, setBrand, resetBrand, defaultBrand } = useBrand();
-  const { user, logout, role } = useAuth();
+  const { profile: user, logout, role } = useAuth();
+  const rawPhoto = extractProfilePhotoFromPayload(user);
+  const profilePhotoUrl = rawPhoto ? resolveProfilePhotoUrl(rawPhoto) : "";
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -2900,13 +2903,33 @@ export default function AdminDashboard() {
                         </tr>
                       ))
                     : null}
-                  {paginatedUserRows.map((user) => (
-                    <tr key={user.id}>
-                      <td className="users-col-user">
-                        <div className="users-cell-user">
-                          <span className="users-avatar" aria-hidden>
-                            {avatarInitialsFromDisplayName(user.displayName)}
-                          </span>
+                  {paginatedUserRows.map((user) => {
+                    const userPhoto = extractProfilePhotoFromPayload(user);
+                    const userPhotoUrl = userPhoto ? resolveProfilePhotoUrl(userPhoto) : "";
+                    return (
+                      <tr key={user.id}>
+                        <td className="users-col-user">
+                          <div className="users-cell-user">
+                            <span className="users-avatar" aria-hidden style={{ overflow: "hidden" }}>
+                              {userPhotoUrl ? (
+                                <img
+                                  src={userPhotoUrl}
+                                  alt={user.displayName}
+                                  style={{
+                                    width: "100%",
+                                    height: "100%",
+                                    objectFit: "cover",
+                                    borderRadius: "50%",
+                                  }}
+                                  onError={(e) => {
+                                    e.currentTarget.style.display = "none";
+                                  }}
+                                />
+                              ) : null}
+                              <span style={{ display: userPhotoUrl ? "none" : "inline" }}>
+                                {avatarInitialsFromDisplayName(user.displayName)}
+                              </span>
+                            </span>
                           <div className="users-cell-user-text">
                             <span className="users-cell-name">
                               {user.displayName}
@@ -2997,7 +3020,8 @@ export default function AdminDashboard() {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                  );
+                  })}
                   {!apiAdminUsersLoading &&
                   !paginatedUserRows.length &&
                   usersEmptyMessage ? (
@@ -4419,8 +4443,26 @@ export default function AdminDashboard() {
                     setShowNotifications(false);
                     setShowProfileMenu((prev) => !prev);
                   }}
+                  style={{ overflow: "hidden" }}
                 >
-                  {getInitials(user?.name || "Admin")}
+                  {profilePhotoUrl ? (
+                    <img
+                      src={profilePhotoUrl}
+                      alt={user?.name || "Admin"}
+                      style={{
+                        width: "100%",
+                        height: "100%",
+                        objectFit: "cover",
+                        borderRadius: "50%",
+                      }}
+                      onError={(e) => {
+                        e.currentTarget.style.display = "none";
+                      }}
+                    />
+                  ) : null}
+                  <span style={{ display: profilePhotoUrl ? "none" : "inline" }}>
+                    {getInitials(user?.name || "Admin")}
+                  </span>
                 </button>
 
                 {showProfileMenu && (
