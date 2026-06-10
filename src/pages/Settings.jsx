@@ -659,7 +659,7 @@ export default function Settings() {
     const confirmPassword = String(changePw.confirmPassword || "");
     const errs = {};
     if (!currentPassword.trim()) errs.currentPassword = "Current password is required.";
-    if (newPassword.trim().length < 8) errs.newPassword = "New password must be at least 8 characters.";
+    if (newPassword.trim().length < 6) errs.newPassword = "Password must be at least 6 characters.";
     if (confirmPassword !== newPassword) errs.confirmPassword = "Passwords do not match.";
     setChangePwErrors(errs);
     if (Object.keys(errs).length) return;
@@ -1566,7 +1566,7 @@ export default function Settings() {
           onChange={(v) => setChangePw((p) => ({ ...p, newPassword: v }))}
           error={changePwErrors.newPassword}
           disabled={changePwLoading}
-          placeholder="Minimum 8 characters"
+          placeholder="Minimum 6 characters"
         />
         <Field
           label="Confirm password"

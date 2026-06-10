@@ -582,6 +582,10 @@ function AppsGridSkeleton() {
 
 export default function UserDashboard() {
   const [search, setSearch] = useState("");
+  const [catalogApps, setCatalogApps] = useState([]);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const searchContainerRef = useRef(null);
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [whatsNewItems, setWhatsNewItems] = useState([]);
@@ -695,7 +699,7 @@ export default function UserDashboard() {
     const catalogP = (async () => {
       try {
         const value = await wrap(() =>
-          applicationBackend.list({ ...DASHBOARD_API_QUIET, size: 500 }),
+          applicationBackend.list({ ...DASHBOARD_API_QUIET, size: 100 }),
         );
         return { status: "fulfilled", value };
       } catch (reason) {
@@ -809,6 +813,24 @@ export default function UserDashboard() {
       lastCatalogCountRef.current = nextCatalogFromList;
     }
     setCatalogFromList(nextCatalogFromList);
+
+    if (catalogR.status === "fulfilled") {
+      const listVal = catalogR.value;
+      const rawList = Array.isArray(listVal)
+        ? listVal
+        : Array.isArray(listVal?.data)
+        ? listVal.data
+        : Array.isArray(listVal?.content)
+        ? listVal.content
+        : Array.isArray(listVal?.applications)
+        ? listVal.applications
+        : Array.isArray(listVal?.apps)
+        ? listVal.apps
+        : [];
+      setCatalogApps(rawList.slice(0, 100));
+    } else if (!silent && !isRefresh) {
+      setCatalogApps([]);
+    }
 
     if (myAppsUsageR.status === "fulfilled") {
       setMyAppsUsageOptions(normalizeMyAppsUsageOptions(myAppsUsageR.value));
@@ -1343,6 +1365,180 @@ export default function UserDashboard() {
     return undefined;
   }, [selectedUsageAppId, usageRange, usageFetchVersion]);
 
+  const NAVIGATION_TARGETS = useMemo(() => [
+    { type: "Navigation", label: "Dashboard Overview", subtitle: "Main overview of account status and usage statistics", route: "/dashboard" },
+    { type: "Navigation", label: "All Application Catalog", subtitle: "Browse and subscribe to available applications", route: "/all-apps" },
+    { type: "Navigation", label: "My Subscribed Applications", subtitle: "Launch your active and subscribed services", route: "/my-apps" },
+    { type: "Navigation", label: "Favorite Applications", subtitle: "Quick access to your starred applications", route: "/favorites" },
+    { type: "Navigation", label: "User Profile", subtitle: "View and edit personal details and verification status", route: "/profile" },
+    { type: "Navigation", label: "Account Settings", subtitle: "Configure notification settings, system preferences, and security", route: "/settings" },
+    { type: "Navigation", label: "Audit Log & Activity Feed", subtitle: "Trace history of all transactions, logins, and service actions", route: "/activity" },
+    { type: "Navigation", label: "Support Ticket Center", subtitle: "View recent queries, active tickets, and chat with agents", route: "/tickets" },
+    { type: "Navigation", label: "Submit New Ticket", subtitle: "Open a support query or request system changes", route: "/support/ticket" }
+  ], []);
+
+  const searchSuggestions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+
+    const suggestions = [];
+
+    // 1. Apps
+    const matchedApps = catalogApps
+      .filter(app => {
+        const name = (app?.appName ?? app?.name ?? "").toLowerCase();
+        const desc = (app?.description ?? app?.detail ?? "").toLowerCase();
+        return name.includes(q) || desc.includes(q);
+      })
+      .slice(0, 5)
+      .map(app => ({
+        type: "Apps",
+        label: app?.appName ?? app?.name ?? "App",
+        subtitle: app?.description ?? app?.detail ?? "",
+        route: app?.routePath ?? app?.route ?? `/all-apps`
+      }));
+    suggestions.push(...matchedApps);
+
+    // 2. Tickets
+    const matchedTickets = recentTickets
+      .filter(t => {
+        const id = String(t?.id ?? "").toLowerCase();
+        const subj = (t?.subject ?? t?.title ?? "").toLowerCase();
+        const desc = (t?.description ?? "").toLowerCase();
+        return id.includes(q) || subj.includes(q) || desc.includes(q);
+      })
+      .slice(0, 5)
+      .map(t => ({
+        type: "Tickets",
+        label: t?.subject ?? t?.title ?? `Ticket #${t?.id}`,
+        subtitle: `Status: ${t?.status || "Open"} • #${t?.id}`,
+        route: `/support/ticket/${t?.id}`
+      }));
+    suggestions.push(...matchedTickets);
+
+    // 3. Transactions
+    const matchedTxns = transactions
+      .filter(t => {
+        const id = String(t?.id ?? "").toLowerCase();
+        const desc = (t?._searchExtra ?? "").toLowerCase();
+        const status = (t?.status ?? "").toLowerCase();
+        const amount = (t?.amount ?? "").toLowerCase();
+        return id.includes(q) || desc.includes(q) || status.includes(q) || amount.includes(q);
+      })
+      .slice(0, 5)
+      .map(t => ({
+        type: "Transactions",
+        label: t?.id || "Transaction",
+        subtitle: `${t?.amount || ""} • Status: ${t?.status || "Pending"} • ${t?.time || ""}`,
+        route: "/activity"
+      }));
+    suggestions.push(...matchedTxns);
+
+    // 4. Navigation
+    const matchedNav = NAVIGATION_TARGETS.filter(n => {
+      return n.label.toLowerCase().includes(q) || n.subtitle.toLowerCase().includes(q);
+    });
+    suggestions.push(...matchedNav);
+
+    // 5. Referrals
+    const referralTerms = ["refer", "referral", "invite", "share", "bonus", "commission", "code"];
+    if (referralTerms.some(t => q.includes(t))) {
+      suggestions.push({
+        type: "Referrals",
+        label: "Referrals Program",
+        subtitle: "Invite friends, track status, and earn rewards",
+        route: "/profile"
+      });
+    }
+
+    // 6. Dashboard Modules
+    const MODULES = [
+      { type: "Navigation", label: "App Usage Analytics", subtitle: "Analyze application usage logs and timeseries data", route: "/dashboard" },
+      { type: "Navigation", label: "Transaction History", subtitle: "Export invoices and view past debit/credit payments", route: "/dashboard" },
+      { type: "Navigation", label: "Announcements & What's New", subtitle: "Stay updated with company announcements and new features", route: "/dashboard" }
+    ];
+    const matchedModules = MODULES.filter(m => {
+      return m.label.toLowerCase().includes(q) || m.subtitle.toLowerCase().includes(q);
+    });
+    suggestions.push(...matchedModules);
+
+    return suggestions;
+  }, [search, catalogApps, recentTickets, transactions, NAVIGATION_TARGETS]);
+
+  const groupedSuggestions = useMemo(() => {
+    const groups = {};
+    searchSuggestions.forEach((item, index) => {
+      if (!groups[item.type]) {
+        groups[item.type] = [];
+      }
+      groups[item.type].push({ ...item, flatIndex: index });
+    });
+    return groups;
+  }, [searchSuggestions]);
+
+  const getCategoryColor = (type) => {
+    const map = {
+      Apps: "#3b82f6",
+      Tickets: "#ea580c",
+      Transactions: "#059669",
+      Navigation: "#7c3aed",
+      Referrals: "#ec4899"
+    };
+    return map[type] || "#64748b";
+  };
+
+  const executeSearch = () => {
+    const active = highlightedIndex >= 0 && highlightedIndex < searchSuggestions.length
+      ? searchSuggestions[highlightedIndex]
+      : searchSuggestions[0];
+    if (active) {
+      navigate(active.route);
+      setSearch("");
+      setShowSearchDropdown(false);
+      setHighlightedIndex(-1);
+    }
+  };
+
+  const handleSuggestionClick = (route) => {
+    navigate(route);
+    setSearch("");
+    setShowSearchDropdown(false);
+    setHighlightedIndex(-1);
+  };
+
+  const handleSearchKeyDown = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightedIndex((prev) =>
+        searchSuggestions.length > 0 ? (prev + 1) % searchSuggestions.length : -1
+      );
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightedIndex((prev) =>
+        searchSuggestions.length > 0
+          ? (prev - 1 + searchSuggestions.length) % searchSuggestions.length
+          : -1
+      );
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      executeSearch();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setShowSearchDropdown(false);
+      setHighlightedIndex(-1);
+    }
+  };
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) {
+        setShowSearchDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const filteredTransactions = query
     ? transactions.filter((item) =>
         `${item.id} ${item.time} ${item.amount} ${item.status} ${item._searchExtra || ""}`
@@ -1704,7 +1900,7 @@ export default function UserDashboard() {
             </div>
           ) : null}
         </div>
-        <div className="ud-search-wrap">
+        <div className="ud-search-wrap" ref={searchContainerRef}>
           <svg
             className="ud-si"
             width="16"
@@ -1715,6 +1911,8 @@ export default function UserDashboard() {
             strokeWidth="2"
             strokeLinecap="round"
             strokeLinejoin="round"
+            style={{ cursor: "pointer" }}
+            onClick={() => executeSearch()}
           >
             <circle cx="11" cy="11" r="8" />
             <path d="M21 21l-4.35-4.35" />
@@ -1723,8 +1921,48 @@ export default function UserDashboard() {
             className="ud-search-field"
             placeholder="Search apps, subscriptions, tickets, invoices..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setShowSearchDropdown(true);
+              setHighlightedIndex(-1);
+            }}
+            onFocus={() => setShowSearchDropdown(true)}
+            onKeyDown={handleSearchKeyDown}
           />
+          {showSearchDropdown && searchSuggestions.length > 0 && (
+            <div className="ud-search-dropdown">
+              {["Apps", "Tickets", "Transactions", "Navigation", "Referrals"].map(cat => {
+                const items = groupedSuggestions[cat];
+                if (!items || items.length === 0) return null;
+                return (
+                  <div key={cat}>
+                    <div className="ud-search-section-title">{cat}</div>
+                    {items.map(item => (
+                      <button
+                        key={`${item.type}-${item.label}-${item.flatIndex}`}
+                        type="button"
+                        className={`ud-search-item ${item.flatIndex === highlightedIndex ? "ud-search-item--active" : ""}`}
+                        onClick={() => handleSuggestionClick(item.route)}
+                        onMouseEnter={() => setHighlightedIndex(item.flatIndex)}
+                      >
+                        <span
+                          className="ud-search-item-icon"
+                          style={{ background: getCategoryColor(item.type) }}
+                        >
+                          {item.type.slice(0, 1)}
+                        </span>
+                        <div>
+                          <span className="ud-search-item-label">{item.label}</span>
+                          <span className="ud-search-item-subtitle">{item.subtitle}</span>
+                        </div>
+                        <span className="ud-search-item-type">{item.type}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 

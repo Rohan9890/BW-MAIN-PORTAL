@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useBrand } from "../context/BrandContext";
 import { getGreetingFirstName, useAuth } from "../context/AuthContext";
 import { useNotificationInbox } from "../context/NotificationInboxContext";
-import { applicationBackend } from "../services/backendApis";
+import { applicationBackend, ticketsBackend } from "../services/backendApis";
 import { resolveNotificationNav } from "../services/notificationUtils";
 import { dashboardApi } from "../services";
 import { onAppsCatalogChanged } from "../services/uiEvents";
@@ -88,6 +88,11 @@ export default function Home() {
   const navigate = useNavigate();
   const chartGradId = useId().replace(/:/g, "");
   const [search, setSearch] = useState("");
+  const [catalogApps, setCatalogApps] = useState([]);
+  const [supportTickets, setSupportTickets] = useState([]);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const searchContainerRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [homeData, setHomeData] = useState({});
@@ -114,6 +119,50 @@ export default function Home() {
       cancel = true;
     };
   }, [homeReloadToken]);
+
+  useEffect(() => {
+    let cancel = false;
+    (async () => {
+      try {
+        const [appsRes, ticketsRes] = await Promise.all([
+          applicationBackend.list({ size: 100 }).catch(() => null),
+          ticketsBackend.my().catch(() => null)
+        ]);
+        if (cancel) return;
+
+        if (appsRes) {
+          const rawList = Array.isArray(appsRes)
+            ? appsRes
+            : Array.isArray(appsRes?.data)
+            ? appsRes.data
+            : Array.isArray(appsRes?.content)
+            ? appsRes.content
+            : Array.isArray(appsRes?.applications)
+            ? appsRes.applications
+            : Array.isArray(appsRes?.apps)
+            ? appsRes.apps
+            : [];
+          setCatalogApps(rawList.slice(0, 100));
+        }
+
+        if (ticketsRes) {
+          const rawTickets = Array.isArray(ticketsRes)
+            ? ticketsRes
+            : Array.isArray(ticketsRes?.data)
+            ? ticketsRes.data
+            : Array.isArray(ticketsRes?.content)
+            ? ticketsRes.content
+            : [];
+          setSupportTickets(rawTickets);
+        }
+      } catch (err) {
+        // silent fail
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, []);
 
   useEffect(() => onAppsCatalogChanged(() => setHomeReloadToken((t) => t + 1)), []);
 
@@ -213,53 +262,179 @@ export default function Home() {
     );
   }, [search, apps]);
 
-  const searchResults = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return [];
+  const NAVIGATION_TARGETS = useMemo(() => [
+    { type: "Navigation", label: "Dashboard Overview", subtitle: "Main overview of account status and usage statistics", route: "/dashboard" },
+    { type: "Navigation", label: "All Application Catalog", subtitle: "Browse and subscribe to available applications", route: "/all-apps" },
+    { type: "Navigation", label: "My Subscribed Applications", subtitle: "Launch your active and subscribed services", route: "/my-apps" },
+    { type: "Navigation", label: "Favorite Applications", subtitle: "Quick access to your starred applications", route: "/favorites" },
+    { type: "Navigation", label: "User Profile", subtitle: "View and edit personal details and verification status", route: "/profile" },
+    { type: "Navigation", label: "Account Settings", subtitle: "Configure notification settings, system preferences, and security", route: "/settings" },
+    { type: "Navigation", label: "Audit Log & Activity Feed", subtitle: "Trace history of all transactions, logins, and service actions", route: "/activity" },
+    { type: "Navigation", label: "Support Ticket Center", subtitle: "View recent queries, active tickets, and chat with agents", route: "/tickets" },
+    { type: "Navigation", label: "Submit New Ticket", subtitle: "Open a support query or request system changes", route: "/support/ticket" }
+  ], []);
 
-    const appResults = apps
-      .filter((item) =>
-        `${item.name} ${item.description}`.toLowerCase().includes(query),
-      )
-      .map((item) => ({
-        key: `app-${item.name}`,
-        title: item.name,
-        subtitle: item.description,
-        type: "App",
-        route: item.route,
-        color: item.color,
+  const searchSuggestions = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+
+    const suggestions = [];
+
+    // 1. Apps
+    const matchedApps = catalogApps
+      .filter(app => {
+        const name = (app?.appName ?? app?.name ?? "").toLowerCase();
+        const desc = (app?.description ?? app?.detail ?? "").toLowerCase();
+        return name.includes(q) || desc.includes(q);
+      })
+      .slice(0, 5)
+      .map(app => ({
+        type: "Apps",
+        label: app?.appName ?? app?.name ?? "App",
+        subtitle: app?.description ?? app?.detail ?? "",
+        route: app?.routePath ?? app?.route ?? `/all-apps`
       }));
+    suggestions.push(...matchedApps);
 
-    const actionResults = recommendedActions
-      .filter((item) =>
-        `${item.title} ${item.description}`.toLowerCase().includes(query),
-      )
-      .map((item) => ({
-        key: `action-${item.title}`,
-        title: item.title,
-        subtitle: item.description,
-        type: "Action",
-        route: item.route,
-        color: item.color,
+    // 2. Tickets
+    const matchedTickets = supportTickets
+      .filter(t => {
+        const id = String(t?.id ?? "").toLowerCase();
+        const subj = (t?.subject ?? t?.title ?? "").toLowerCase();
+        const desc = (t?.description ?? "").toLowerCase();
+        return id.includes(q) || subj.includes(q) || desc.includes(q);
+      })
+      .slice(0, 5)
+      .map(t => ({
+        type: "Tickets",
+        label: t?.subject ?? t?.title ?? `Ticket #${t?.id}`,
+        subtitle: `Status: ${t?.status || "Open"} • #${t?.id}`,
+        route: `/support/ticket/${t?.id}`
       }));
+    suggestions.push(...matchedTickets);
 
-    const transactionResults = transactions
-      .filter((item) =>
-        `${item.id} ${item.status} ${item.rowKey || ""}`
-          .toLowerCase()
-          .includes(query),
-      )
-      .map((item) => ({
-        key: `transaction-${item.rowKey || item.id}`,
-        title: item.id,
-        subtitle: `${item.amount} • ${item.status}`,
-        type: "Invoice",
-        route: "/activity",
-        color: item.color,
+    // 3. Transactions
+    const matchedTxns = transactions
+      .filter(t => {
+        const id = String(t?.id ?? "").toLowerCase();
+        const desc = (t?.description ?? t?.paymentDescription ?? "").toLowerCase();
+        const status = (t?.status ?? "").toLowerCase();
+        const amount = (t?.amount ?? "").toLowerCase();
+        return id.includes(q) || desc.includes(q) || status.includes(q) || amount.includes(q);
+      })
+      .slice(0, 5)
+      .map(t => ({
+        type: "Transactions",
+        label: t?.id || "Transaction",
+        subtitle: `${t?.amount || ""} • Status: ${t?.status || "Pending"} • ${t?.time || ""}`,
+        route: "/activity"
       }));
+    suggestions.push(...matchedTxns);
 
-    return [...appResults, ...actionResults, ...transactionResults].slice(0, 6);
-  }, [search, apps, recommendedActions, transactions]);
+    // 4. Navigation
+    const matchedNav = NAVIGATION_TARGETS.filter(n => {
+      return n.label.toLowerCase().includes(q) || n.subtitle.toLowerCase().includes(q);
+    });
+    suggestions.push(...matchedNav);
+
+    // 5. Referrals
+    const referralTerms = ["refer", "referral", "invite", "share", "bonus", "commission", "code"];
+    if (referralTerms.some(t => q.includes(t))) {
+      suggestions.push({
+        type: "Referrals",
+        label: "Referrals Program",
+        subtitle: "Invite friends, track status, and earn rewards",
+        route: "/profile"
+      });
+    }
+
+    // 6. Dashboard Modules
+    const MODULES = [
+      { type: "Navigation", label: "App Usage Analytics", subtitle: "Analyze application usage logs and timeseries data", route: "/dashboard" },
+      { type: "Navigation", label: "Transaction History", subtitle: "Export invoices and view past debit/credit payments", route: "/dashboard" },
+      { type: "Navigation", label: "Announcements & What's New", subtitle: "Stay updated with company announcements and new features", route: "/dashboard" }
+    ];
+    const matchedModules = MODULES.filter(m => {
+      return m.label.toLowerCase().includes(q) || m.subtitle.toLowerCase().includes(q);
+    });
+    suggestions.push(...matchedModules);
+
+    return suggestions;
+  }, [search, catalogApps, supportTickets, transactions, NAVIGATION_TARGETS]);
+
+  const groupedSuggestions = useMemo(() => {
+    const groups = {};
+    searchSuggestions.forEach((item, index) => {
+      if (!groups[item.type]) {
+        groups[item.type] = [];
+      }
+      groups[item.type].push({ ...item, flatIndex: index });
+    });
+    return groups;
+  }, [searchSuggestions]);
+
+  const getCategoryColor = (type) => {
+    const map = {
+      Apps: "#3b82f6",
+      Tickets: "#ea580c",
+      Transactions: "#059669",
+      Navigation: "#7c3aed",
+      Referrals: "#ec4899"
+    };
+    return map[type] || "#64748b";
+  };
+
+  const executeSearch = () => {
+    const active = highlightedIndex >= 0 && highlightedIndex < searchSuggestions.length
+      ? searchSuggestions[highlightedIndex]
+      : searchSuggestions[0];
+    if (active) {
+      navigate(active.route);
+      setSearch("");
+      setShowSearchDropdown(false);
+      setHighlightedIndex(-1);
+    }
+  };
+
+  const handleSuggestionClick = (route) => {
+    navigate(route);
+    setSearch("");
+    setShowSearchDropdown(false);
+    setHighlightedIndex(-1);
+  };
+
+  const handleSearchKeyDown = (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHighlightedIndex((prev) =>
+        searchSuggestions.length > 0 ? (prev + 1) % searchSuggestions.length : -1
+      );
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHighlightedIndex((prev) =>
+        searchSuggestions.length > 0
+          ? (prev - 1 + searchSuggestions.length) % searchSuggestions.length
+          : -1
+      );
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      executeSearch();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      setShowSearchDropdown(false);
+      setHighlightedIndex(-1);
+    }
+  };
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) {
+        setShowSearchDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   if (loading) {
     return <PageLoading title="Loading dashboard..." />;
@@ -277,23 +452,6 @@ export default function Home() {
       />
     );
   }
-
-  const executeSearch = () => {
-    if (!searchResults.length) return;
-    navigate(searchResults[0].route);
-    setSearch("");
-  };
-
-  const handleSearchSubmit = (event) => {
-    if (event.key !== "Enter") return;
-    event.preventDefault();
-    executeSearch();
-  };
-
-  const handleSearchItemClick = (route) => {
-    navigate(route);
-    setSearch("");
-  };
 
   return (
     <div style={{ width: "100%", display: "grid", gap: 14 }}>
@@ -472,6 +630,7 @@ export default function Home() {
           </p>
         </div>
         <div
+          ref={searchContainerRef}
           style={{
             flex: 1.4,
             maxWidth: 780,
@@ -492,7 +651,7 @@ export default function Home() {
               viewBox="0 0 24 24"
               fill="none"
               xmlns="http://www.w3.org/2000/svg"
-              onClick={executeSearch}
+              onClick={() => executeSearch()}
               style={{
                 position: "absolute",
                 left: 14,
@@ -519,108 +678,51 @@ export default function Home() {
             <input
               className="search-input"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={handleSearchSubmit}
+              onChange={(e) => {
+                setSearch(e.target.value);
+                setShowSearchDropdown(true);
+                setHighlightedIndex(-1);
+              }}
+              onFocus={() => setShowSearchDropdown(true)}
+              onKeyDown={handleSearchKeyDown}
               placeholder="Search apps, subscriptions, tickets, invoices..."
               style={{
                 paddingLeft: 44,
               }}
             />
           </div>
-          {search.trim() && (
-            <div
-              style={{
-                position: "absolute",
-                top: "calc(100% + 10px)",
-                left: 0,
-                right: 0,
-                background: "#ffffff",
-                border: "1px solid #e2e8f0",
-                borderRadius: 14,
-                boxShadow: "0 20px 40px rgba(15,23,42,0.12)",
-                overflow: "hidden",
-                zIndex: 20,
-              }}
-            >
-              {searchResults.length ? (
-                searchResults.map((item) => (
-                  <button
-                    key={item.key}
-                    type="button"
-                    onClick={() => handleSearchItemClick(item.route)}
-                    style={{
-                      width: "100%",
-                      display: "grid",
-                      gridTemplateColumns: "auto 1fr auto",
-                      gap: 12,
-                      alignItems: "center",
-                      textAlign: "left",
-                      border: "none",
-                      background: "#ffffff",
-                      padding: "12px 14px",
-                      borderBottom: "1px solid #f1f5f9",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <span
-                      style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: 8,
-                        background: item.color,
-                        display: "grid",
-                        placeItems: "center",
-                        color: "#fff",
-                        fontSize: 11,
-                        fontWeight: 800,
-                      }}
-                    >
-                      {item.type.slice(0, 1)}
-                    </span>
-                    <span>
-                      <span
-                        style={{
-                          display: "block",
-                          color: "#0f172a",
-                          fontWeight: 700,
-                          fontSize: 12,
-                        }}
+          {showSearchDropdown && searchSuggestions.length > 0 && (
+            <div className="ud-search-dropdown">
+              {["Apps", "Tickets", "Transactions", "Navigation", "Referrals"].map(cat => {
+                const items = groupedSuggestions[cat];
+                if (!items || items.length === 0) return null;
+                return (
+                  <div key={cat}>
+                    <div className="ud-search-section-title">{cat}</div>
+                    {items.map(item => (
+                      <button
+                        key={`${item.type}-${item.label}-${item.flatIndex}`}
+                        type="button"
+                        className={`ud-search-item ${item.flatIndex === highlightedIndex ? "ud-search-item--active" : ""}`}
+                        onClick={() => handleSuggestionClick(item.route)}
+                        onMouseEnter={() => setHighlightedIndex(item.flatIndex)}
                       >
-                        {item.title}
-                      </span>
-                      <span
-                        style={{
-                          display: "block",
-                          marginTop: 2,
-                          color: "#64748b",
-                          fontSize: 11,
-                        }}
-                      >
-                        {item.subtitle}
-                      </span>
-                    </span>
-                    <span
-                      style={{
-                        color: "#94a3b8",
-                        fontSize: 10,
-                        fontWeight: 700,
-                      }}
-                    >
-                      {item.type}
-                    </span>
-                  </button>
-                ))
-              ) : (
-                <div
-                  style={{
-                    padding: "14px 16px",
-                    color: "#64748b",
-                    fontSize: 12,
-                  }}
-                >
-                  No matching apps, actions, or invoices found.
-                </div>
-              )}
+                        <span
+                          className="ud-search-item-icon"
+                          style={{ background: getCategoryColor(item.type) }}
+                        >
+                          {item.type.slice(0, 1)}
+                        </span>
+                        <div>
+                          <span className="ud-search-item-label">{item.label}</span>
+                          <span className="ud-search-item-subtitle">{item.subtitle}</span>
+                        </div>
+                        <span className="ud-search-item-type">{item.type}</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

@@ -13,7 +13,7 @@ function validateOtp(value) {
 }
 
 function validatePassword(value) {
-  return String(value || "").trim().length >= 8;
+  return String(value || "").trim().length >= 6;
 }
 
 export default function ForgotPassword() {
@@ -77,7 +77,7 @@ export default function ForgotPassword() {
     if (!validateEmail(email)) errs.email = "Enter a valid email address.";
     if (!validateOtp(otp)) errs.otp = "OTP must be 6 digits.";
     if (!validatePassword(newPassword))
-      errs.newPassword = "Password must be at least 8 characters.";
+      errs.newPassword = "Password must be at least 6 characters.";
     if (newPassword !== confirmPassword)
       errs.confirmPassword = "Passwords do not match.";
 
@@ -213,7 +213,7 @@ export default function ForgotPassword() {
                     onChange={(e) =>
                       setForm((p) => ({ ...p, newPassword: e.target.value }))
                     }
-                    placeholder="Minimum 8 characters"
+                    placeholder="Minimum 6 characters"
                     style={inputStyle(Boolean(fieldErrors.newPassword))}
                     disabled={loading}
                   />
