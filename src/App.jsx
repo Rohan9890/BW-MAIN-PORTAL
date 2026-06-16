@@ -15,6 +15,7 @@ import Registration from "./pages/Registration";
 import VerifyEmail from "./pages/VerifyEmail";
 import PlansPricing from "./pages/PlansPricing";
 import MakePayment from "./pages/MakePayment";
+import AdminInviteAccept from "./pages/AdminInviteAccept";
 
 import ProtectedRoute from "./components/ProtectedRoute";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/admin/invite/:token" element={<AdminInviteAccept />} />
           <Route path="/register" element={<Registration />} />
           <Route path="/register/organization" element={<Registration />} />
 
@@ -82,27 +84,6 @@ export default function App() {
             }
           />
 
-          {/* Legacy alias kept for compatibility */}
-          <Route
-            path="/user-dashboard"
-            element={
-              <ProtectedRoute requiredRole="ROLE_USER">
-                <Suspense fallback={<RouteLoader label="Loading dashboard..." />}>
-                  <UserDashboard />
-                </Suspense>
-              </ProtectedRoute>
-            }
-          />
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute requiredRole="ROLE_USER">
-              <Suspense fallback={<RouteLoader label="Loading dashboard..." />}>
-                <UserDashboard />
-              </Suspense>
-            </ProtectedRoute>
-          }
-        />
 
         <Route
           path="/support/chat"
@@ -167,6 +148,9 @@ export default function App() {
               </ProtectedRoute>
             }
           >
+            <Route path="/dashboard" element={<Suspense fallback={<RouteLoader label="Loading dashboard..." />}><UserDashboard /></Suspense>} />
+            {/* Legacy alias kept for compatibility */}
+            <Route path="/user-dashboard" element={<Suspense fallback={<RouteLoader label="Loading dashboard..." />}><UserDashboard /></Suspense>} />
             <Route path="/home" element={<Home />} />
             <Route path="/all-apps" element={<AllApps />} />
             <Route path="/my-apps" element={<MyApps />} />

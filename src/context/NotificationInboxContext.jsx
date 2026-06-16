@@ -22,7 +22,7 @@ const NotificationInboxContext = createContext(null);
 
 export function NotificationInboxProvider({ children }) {
   const { token, role } = useAuth();
-  const isAdminInbox = role === "ROLE_ADMIN";
+  const isAdminInbox = role === "ROLE_ADMIN" || role === "ROLE_OWNER";
   const mountedRef = useRef(true);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);

@@ -660,3 +660,39 @@
     min-height: 44px;
   }
 }
+
+/* Referral invite link — locked read-only field */
+.reg-referral-input-wrap {
+  position: relative;
+}
+
+.reg-referral-locked {
+  background: #f1f5f9 !important;
+  color: #475569;
+  cursor: not-allowed;
+  padding-right: 2.25rem;
+}
+
+.reg-referral-lock-icon {
+  position: absolute;
+  right: 0.75rem;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 0.85rem;
+  opacity: 0.75;
+  pointer-events: none;
+  line-height: 1;
+}
+
+.reg-referral-locked-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+.reg-referral-locked-wrap:focus-within {
+  border-color: #cbd5e1;
+  box-shadow: none;
+}

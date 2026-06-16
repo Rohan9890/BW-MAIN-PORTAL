@@ -48,11 +48,11 @@ export function getTicketStatusTone(status) {
 export function getTicketStatusPillStyle(status) {
   const tone = getTicketStatusTone(status);
   if (tone === "success") {
-    return { background: "#dcfce7", color: "#166534", border: "1px solid #bbf7d0" };
+    return { background: "rgba(22, 163, 74, 0.12)", color: "#14532d", border: "1px solid rgba(22, 163, 74, 0.25)", boxShadow: "0 2px 8px rgba(22, 163, 74, 0.1)" };
   }
   if (tone === "warning") {
-    return { background: "#fef9c3", color: "#854d0e", border: "1px solid #fde68a" };
+    return { background: "rgba(234, 179, 8, 0.12)", color: "#713f12", border: "1px solid rgba(234, 179, 8, 0.3)", boxShadow: "0 2px 8px rgba(234, 179, 8, 0.1)" };
   }
-  return { background: "#eff6ff", color: "#1d4ed8", border: "1px solid #bfdbfe" };
+  return { background: "rgba(37, 99, 235, 0.12)", color: "#1e3a8a", border: "1px solid rgba(37, 99, 235, 0.25)", boxShadow: "0 2px 8px rgba(37, 99, 235, 0.1)" };
 }
 

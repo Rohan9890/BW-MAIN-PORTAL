@@ -8,9 +8,7 @@ import {
   Suspense,
 } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { useBrand } from "../context/BrandContext";
-import { getGreetingFirstName, getInitials, useAuth } from "../context/AuthContext";
-import { useNotificationInbox } from "../context/NotificationInboxContext";
+import { getGreetingFirstName, useAuth } from "../context/AuthContext";
 import { dashboardApi } from "../services";
 import {
   readDashboardBundleCache,
@@ -24,7 +22,6 @@ import { getUsageTimeseriesCache } from "../services/usageTimeseriesCache";
 import { DASHBOARD_INVALIDATE_EVENT, invalidateDashboardData } from "../services/dashboardInvalidate";
 import { announcementsApi } from "../services/announcementsApi";
 import { announcementWhatsNewItem } from "../utils/announcements";
-import { extractProfilePhotoFromPayload, resolveProfilePhotoUrl } from "../utils/mediaUrl";
 import { onAppsCatalogChanged, onMyAppsChanged } from "../services/uiEvents";
 import { extractApiArrayAndMeta, peelRepeatedApiEnvelope } from "../utils/apiEnvelope";
 import {
@@ -164,13 +161,7 @@ function getInitialDashboardBundleDeduped(onRetrying) {
   return _dashboardInitialLoadPromise;
 }
 
-const NAV_ITEMS = [
-  { label: "Home", path: "/dashboard" },
-  { label: "All Apps", path: "/all-apps" },
-  { label: "My Apps", path: "/my-apps" },
-  { label: "Favorites", path: "/favorites" },
-  { label: "Activity", path: "/activity" },
-];
+
 
 function formatInr(amount) {
   const n = Number(amount);
@@ -586,27 +577,11 @@ export default function UserDashboard() {
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const searchContainerRef = useRef(null);
-  const [showAvatarMenu, setShowAvatarMenu] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [whatsNewItems, setWhatsNewItems] = useState([]);
   const [whatsNewLoading, setWhatsNewLoading] = useState(false);
   const [whatsNewError, setWhatsNewError] = useState("");
   const [serverActivity, setServerActivity] = useState([]);
-  const avatarRef = useRef(null);
-  const notifRef = useRef(null);
-  const { brand, defaultBrand } = useBrand();
-  const { profile, logout, token } = useAuth();
-  const {
-    notifications,
-    unreadCount: inboxUnreadCount,
-    loading: notifLoading,
-    retrying: inboxRetrying,
-    error: notifError,
-    refresh: refreshNotifications,
-    markOneRead,
-    deleteOne,
-    markAllRead,
-  } = useNotificationInbox();
+  const { profile, token } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [summary, setSummary] = useState(null);
@@ -655,8 +630,7 @@ export default function UserDashboard() {
   const initialDashboardLoadDoneRef = useRef(false);
   const lastCatalogCountRef = useRef(0);
   const query = search.trim().toLowerCase();
-  const rawPhoto = extractProfilePhotoFromPayload(profile);
-  const profilePhotoUrl = rawPhoto ? resolveProfilePhotoUrl(rawPhoto) : "";
+
 
   const loadDashboardData = useCallback(async (options = {}) => {
     const { silent = false, force = false } = options;
@@ -961,7 +935,6 @@ export default function UserDashboard() {
         if (cancelled) return;
         setWhatsNewItems(
           rows
-            .slice(0, 6)
             .map(announcementWhatsNewItem)
             .filter(Boolean),
         );
@@ -1562,309 +1535,11 @@ export default function UserDashboard() {
     showSuccess("CSV exported (visible rows only)");
   }, [filteredTransactions]);
 
-  // Close popups when clicking outside
-  useEffect(() => {
-    function handleClick(e) {
-      if (avatarRef.current && !avatarRef.current.contains(e.target)) {
-        setShowAvatarMenu(false);
-      }
-      if (notifRef.current && !notifRef.current.contains(e.target)) {
-        setShowNotifications(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-    };
-  }, []);
-
-  const handleUdMarkAllRead = () => void markAllRead();
-
-  const handleUdDeleteNotif = (e, id) => {
-    e.preventDefault();
-    e.stopPropagation();
-    void deleteOne(id);
-  };
-
-  const handleUdNotifNavigate = async (item) => {
-    const id = item?.id;
-    if (id != null) await markOneRead(id);
-    setShowNotifications(false);
-    const target = item?.navigateTo;
-    if (target && /^https?:\/\//i.test(target)) {
-      window.open(target, "_blank", "noopener,noreferrer");
-      return;
-    }
-    if (target && String(target).startsWith("/")) {
-      navigate(target);
-      return;
-    }
-    navigate("/activity");
-  };
 
   return (
     <div className="ud-page">
-      {/* ── COMPANY HEADER ── */}
-      <header className="ud-header">
-        <div className="ud-header-brand">
-          <img
-            src={brand.logoUrl || defaultBrand.logoUrl}
-            alt={brand.name}
-            className="ud-header-logo"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
-            }}
-          />
-          <span className="ud-header-name">
-            {brand.name || defaultBrand.name}
-          </span>
-        </div>
-        <div className="ud-header-actions">
-          {/* Notification Bell */}
-          <div className="ud-notif-wrap" ref={notifRef}>
-            <button
-              className="ud-hbtn ud-notif-btn"
-              title="Notifications"
-              onClick={() => {
-                setShowAvatarMenu(false);
-                setShowNotifications((v) => {
-                  const next = !v;
-                  if (next) void refreshNotifications({ force: true });
-                  return next;
-                });
-              }}
-            >
-              <svg
-                width="18"
-                height="18"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-              </svg>
-              {inboxUnreadCount > 0 ? (
-                <span className="ud-notif-badge">
-                  {inboxUnreadCount > 99 ? "99+" : inboxUnreadCount}
-                </span>
-              ) : null}
-            </button>
 
-            {showNotifications && (
-              <div className="ud-notif-popup">
-                <div className="ud-notif-popup-header">
-                  <span className="ud-notif-popup-title">Notifications</span>
-                  {notifications.length > 0 && notifications.some((n) => !n.read) ? (
-                    <button
-                      type="button"
-                      className="ud-notif-mark-all"
-                      onClick={() => void handleUdMarkAllRead()}
-                      disabled={notifLoading}
-                    >
-                      Mark all read
-                    </button>
-                  ) : null}
-                </div>
-                {notifError ? (
-                  <div className="ud-notif-placeholder">
-                    <p className="ud-notif-placeholder-title">{notifError}</p>
-                    <button
-                      type="button"
-                      className="ud-btn-outline"
-                      style={{ marginTop: 8 }}
-                      onClick={() => void refreshNotifications({ force: true })}
-                    >
-                      Retry
-                    </button>
-                  </div>
-                ) : null}
-                {inboxRetrying && notifLoading ? (
-                  <div className="ud-notif-retry-hint" role="status">
-                    Retrying…
-                  </div>
-                ) : null}
-                {notifLoading && notifications.length === 0 && !notifError ? (
-                  <div className="ud-notif-placeholder ud-notif-placeholder--sk">
-                    <NotificationSkeletonRows count={4} />
-                  </div>
-                ) : null}
-                {!notifLoading && notifications.length === 0 && !notifError ? (
-                  <div className="ud-notif-placeholder">
-                    <p className="ud-notif-placeholder-title">
-                      No notifications yet
-                    </p>
-                    <p className="ud-notif-placeholder-sub">
-                      Updates from your account will appear here.
-                    </p>
-                  </div>
-                ) : null}
-                {notifications.map((notif) => (
-                  <div
-                    key={notif.id}
-                    className={`ud-notif-item ud-notif-item--row${
-                      notif.read ? " ud-notif-item--read" : ""
-                    }`}
-                    style={{ display: "flex", alignItems: "stretch" }}
-                  >
-                    <button
-                      type="button"
-                      className="ud-notif-main"
-                      style={{
-                        flex: 1,
-                        display: "flex",
-                        alignItems: "flex-start",
-                        gap: 10,
-                        border: "none",
-                        background: "transparent",
-                        cursor: "pointer",
-                        textAlign: "left",
-                        padding: "10px 8px 10px 12px",
-                      }}
-                      onClick={() => void handleUdNotifNavigate(notif)}
-                    >
-                      <span className="ud-notif-dot" />
-                      <div className="ud-notif-body">
-                        <p className="ud-notif-text">{notif.text}</p>
-                        <small className="ud-notif-time">{notif.time}</small>
-                      </div>
-                    </button>
-                    <button
-                      type="button"
-                      className="ud-notif-dismiss"
-                      title="Delete"
-                      aria-label="Delete notification"
-                      onClick={(e) => void handleUdDeleteNotif(e, notif.id)}
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
 
-          {/* Avatar with popup */}
-          <div className="ud-avatar-wrap" ref={avatarRef}>
-            <button
-              className="ud-header-avatar"
-              onClick={() => setShowAvatarMenu((v) => !v)}
-              title="Account"
-              style={{ overflow: "hidden" }}
-            >
-              {profilePhotoUrl ? (
-                <img
-                  src={profilePhotoUrl}
-                  alt={profile?.name || "User"}
-                  style={{
-                    width: "100%",
-                    height: "100%",
-                    objectFit: "cover",
-                    borderRadius: "50%",
-                  }}
-                  onError={(e) => {
-                    e.currentTarget.style.display = "none";
-                  }}
-                />
-              ) : null}
-              <span style={{ display: profilePhotoUrl ? "none" : "inline" }}>
-                {getInitials(profile?.name || "User")}
-              </span>
-            </button>
-            {showAvatarMenu && (
-              <div className="ud-avatar-popup">
-                <button
-                  className="ud-popup-item"
-                  onClick={() => {
-                    setShowAvatarMenu(false);
-                    navigate("/profile");
-                  }}
-                >
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.9"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="12" cy="8" r="4" />
-                    <path d="M4 20c0-4 3.58-7 8-7s8 3 8 7" />
-                  </svg>
-                  Profile
-                </button>
-                <button
-                  className="ud-popup-item"
-                  onClick={() => {
-                    setShowAvatarMenu(false);
-                    navigate("/settings");
-                  }}
-                >
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.9"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                  </svg>
-                  Settings
-                </button>
-                <div className="ud-popup-divider" />
-                <button
-                  className="ud-popup-item ud-popup-logout"
-                  onClick={() => {
-                    setShowAvatarMenu(false);
-                    logout();
-                    navigate("/login");
-                  }}
-                >
-                  <svg
-                    width="15"
-                    height="15"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.9"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                    <polyline points="16 17 21 12 16 7" />
-                    <line x1="21" y1="12" x2="9" y2="12" />
-                  </svg>
-                  Logout
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      </header>
-
-      {/* ── BLUE NAVBAR ── */}
-      <nav className="ud-navbar">
-        <div className="ud-navbar-inner">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.label}
-              className={`ud-nav-link${location.pathname === item.path ? " ud-nav-active" : ""}`}
-              onClick={() => navigate(item.path)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </nav>
 
       {/* ── DASHBOARD GREETING BAR ── */}
       <div className="ud-top-bar">
@@ -2478,13 +2153,6 @@ export default function UserDashboard() {
                   <span className="ud-new-badge">New</span>
                   <span>🚀</span>
                 </div>
-                <button
-                  type="button"
-                  className="ud-btn-outline"
-                  onClick={() => navigate("/settings")}
-                >
-                  View All Updates
-                </button>
               </div>
               <ul className="ud-wn-list">
                 {whatsNewLoading ? (
@@ -2524,7 +2192,7 @@ export default function UserDashboard() {
             </button>
             <button
               type="button"
-              className="ud-btn-primary"
+              className="ud-btn-outline"
               onClick={() => navigate("/support/ticket")}
             >
               Raise ticket

@@ -1,7 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import Logo from "../components/Logo";
+import ReferralCodeField from "../components/ReferralCodeField";
 import { buildApiRequestUrl } from "../services/apiConfig";
+import {
+  clearStoredReferralRef,
+  resolveReferralCodeForSubmit,
+  resolveReferralInviteState,
+} from "../utils/referralStorage";
 import "./Registration.css";
 
 const REGISTER_URL = buildApiRequestUrl("/register");
@@ -93,7 +99,9 @@ function getFieldIcon(fieldName) {
 
 export default function IndividualRegistration() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [formData, setFormData] = useState({});
+  const [referralLocked, setReferralLocked] = useState(false);
   const [documentType, setDocumentType] = useState("");
   const [documentNumber, setDocumentNumber] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
@@ -123,6 +131,17 @@ export default function IndividualRegistration() {
     ],
     [],
   );
+
+  useEffect(() => {
+    const { ref, locked } = resolveReferralInviteState(location.search);
+    setReferralLocked(locked);
+    if (!ref) return;
+    setFormData((prev) =>
+      prev.referral && String(prev.referral).trim()
+        ? prev
+        : { ...prev, referral: ref },
+    );
+  }, [location.search]);
 
   useEffect(() => {
     setDocumentType(
@@ -244,6 +263,11 @@ export default function IndividualRegistration() {
       payload.append("phoneNumber", String(formData.phone || ""));
       payload.append("password", String(formData.password || ""));
 
+      const referralCode = resolveReferralCodeForSubmit(formData.referral);
+      if (referralCode) {
+        payload.append("referralCode", referralCode);
+      }
+
       const response = await fetch(REGISTER_URL, {
         method: "POST",
         body: payload,
@@ -256,6 +280,7 @@ export default function IndividualRegistration() {
       }
 
       setSubmitSuccess("Registration submitted successfully.");
+      clearStoredReferralRef();
       setDocumentType("");
       setDocumentNumber("");
       setSelectedFile(null);
@@ -316,6 +341,28 @@ export default function IndividualRegistration() {
                 const error = touched[fieldName] ? draftErrors[fieldName] : "";
                 const showError = !!error;
                 const value = formData[fieldName] || "";
+
+                if (fieldName === "referral") {
+                  return (
+                    <ReferralCodeField
+                      key={fieldName}
+                      id="individual-referral"
+                      value={value}
+                      locked={referralLocked}
+                      placeholder={getPlaceholder(fieldName)}
+                      error={showError ? error : ""}
+                      onChange={(e) =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          [fieldName]: e.target.value,
+                        }))
+                      }
+                      onBlur={() =>
+                        setTouched((prev) => ({ ...prev, [fieldName]: true }))
+                      }
+                    />
+                  );
+                }
 
                 return (
                   <div key={fieldName} className="reg-input-block">

@@ -239,7 +239,7 @@ export default function Login() {
       showSuccess("Login successful");
       /** Navigate after token + profile hydrate complete — avoids racing global 401 handlers. */
       const normalizedRole = String(role || "").toUpperCase();
-      if (normalizedRole === "ROLE_ADMIN") {
+      if (normalizedRole === "ROLE_ADMIN" || normalizedRole === "ROLE_OWNER") {
         navigate("/admin");
       } else {
         navigate("/dashboard");

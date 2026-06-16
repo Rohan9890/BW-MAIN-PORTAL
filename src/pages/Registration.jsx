@@ -6,9 +6,10 @@ import "./Registration.css";
 import { buildApiRequestUrl } from "../services/apiConfig";
 import {
   clearStoredReferralRef,
-  persistReferralRef,
-  readStoredReferralRef,
+  resolveReferralCodeForSubmit,
+  resolveReferralInviteState,
 } from "../utils/referralStorage";
+import ReferralCodeField from "../components/ReferralCodeField";
 
 /** Same origin + path as `apiFetch("/register")` → `buildApiRequestUrl("/register")`; kept explicit for registration-only fetch. */
 const REGISTER_URL = buildApiRequestUrl("/register");
@@ -173,15 +174,15 @@ export default function Registration() {
   const [submitSuccess, setSubmitSuccess] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [touched, setTouched] = useState({});
+  const [referralLocked, setReferralLocked] = useState(false);
 
   const config = REG_TYPES[type] ?? REG_TYPES.individual;
 
   // Auto-fill referral from ?ref= and persist for refresh / login → register return.
   useEffect(() => {
-    const fromUrl = new URLSearchParams(location.search).get("ref");
-    const ref = String(fromUrl || readStoredReferralRef() || "").trim();
+    const { ref, locked } = resolveReferralInviteState(location.search);
+    setReferralLocked(locked);
     if (!ref) return;
-    persistReferralRef(ref);
     setFormData((prev) =>
       prev.referral && String(prev.referral).trim()
         ? prev
@@ -222,7 +223,8 @@ export default function Registration() {
     const normalized =
       nextType === "organization" ? "organization" : "individual";
     setType(normalized);
-    const storedRef = readStoredReferralRef();
+    const { ref: storedRef, locked } = resolveReferralInviteState(location.search);
+    setReferralLocked(locked);
     setFormData(storedRef ? { referral: storedRef } : {});
     setDocumentType("");
     setDocumentNumber("");
@@ -330,11 +332,9 @@ export default function Registration() {
       payload.append("password", formData.password);
       payload.append("address", formData.address);
 
-      if (formData.referral) {
-        payload.append("referralCode", formData.referral);
-      } else {
-        const storedRef = readStoredReferralRef();
-        if (storedRef) payload.append("referralCode", storedRef);
+      const referralCode = resolveReferralCodeForSubmit(formData.referral);
+      if (referralCode) {
+        payload.append("referralCode", referralCode);
       }
 
       if (import.meta.env.DEV) {
@@ -471,6 +471,33 @@ export default function Registration() {
                     ? draftErrors[fieldName]
                     : "";
                   const hasError = !!error;
+
+                  if (fieldName === "referral") {
+                    return (
+                      <ReferralCodeField
+                        key={fieldName}
+                        id="registration-referral"
+                        value={value}
+                        locked={referralLocked}
+                        placeholder={
+                          meta?.placeholder || getFieldLabel(fieldName)
+                        }
+                        error={hasError ? error : ""}
+                        onChange={(e) =>
+                          setFormData((prev) => ({
+                            ...prev,
+                            [fieldName]: e.target.value,
+                          }))
+                        }
+                        onBlur={() =>
+                          setTouched((prev) => ({
+                            ...prev,
+                            [fieldName]: true,
+                          }))
+                        }
+                      />
+                    );
+                  }
 
                   return (
                     <div key={fieldName} className="reg-input-block">

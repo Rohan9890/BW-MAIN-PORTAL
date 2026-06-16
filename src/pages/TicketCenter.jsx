@@ -105,45 +105,35 @@ export default function TicketCenter() {
   }, [tickets]);
 
   return (
-    <div className="support-page" style={{ maxWidth: 980, margin: "0 auto", padding: 4 }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          justifyContent: "space-between",
-          gap: 12,
-          flexWrap: "wrap",
-          marginBottom: 14,
-        }}
-      >
-        <div>
-          <h1 className="support-title" style={{ margin: 0, fontSize: 26, letterSpacing: "-0.3px" }}>
-            Support Tickets
-          </h1>
-          <div className="support-subtitle" style={{ marginTop: 4 }}>
-            Track your requests and updates from our support team.
-          </div>
-        </div>
+    <div className="support-page">
+      <div className="support-top-bar">
+        <h2>Support Center</h2>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           <button
             type="button"
             onClick={() => void load({ initial: false })}
             disabled={loading || refreshing}
-            className="support-action"
-            style={ghostBtnStyle(loading || refreshing)}
+            className="support-back-btn"
+            style={{ opacity: loading || refreshing ? 0.7 : 1 }}
           >
             {refreshing ? "Refreshing..." : "Refresh"}
           </button>
           <button
             type="button"
             onClick={() => navigate("/support/ticket")}
-            className="support-btn"
-            style={primaryBtnStyle}
+            className="support-back-btn"
+            style={{ background: "linear-gradient(135deg, #4f46e5, #3b82f6)", color: "#fff", border: "none" }}
           >
             Raise ticket
           </button>
         </div>
       </div>
+
+      <div className="support-glass-container">
+        <div className="support-header-card">
+          <h1>Support Tickets</h1>
+          <p className="subtitle">Track your requests and updates from our support team.</p>
+        </div>
 
       <div className="ticket-inbox">
         <div className="ticket-inbox-head">
@@ -159,7 +149,7 @@ export default function TicketCenter() {
         {!loading && !error && sorted.length === 0 ? (
           <PageEmpty
             title="No tickets yet"
-            subtitle="When you raise a ticket, it’ll show up here with updates."
+            subtitle="When you raise a ticket, it'll show up here with updates."
           />
         ) : null}
 
@@ -217,36 +207,14 @@ export default function TicketCenter() {
           </div>
         ) : null}
       </div>
-      <div style={{ marginTop: 10, color: "#64748b", fontSize: 12, fontWeight: 700 }}>
+      <div className="support-footer" style={{ marginTop: 10, color: "#111", fontSize: 13, fontWeight: 700 }}>
         {refreshing
-          ? "Checking for updates…"
+          ? "Checking for updates..."
           : lastUpdatedAt
             ? "Updated just now"
             : ""}
       </div>
     </div>
+    </div>
   );
 }
-
-const primaryBtnStyle = {
-  border: "none",
-  background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-  color: "#fff",
-  padding: "10px 12px",
-  borderRadius: 12,
-  cursor: "pointer",
-  fontWeight: 950,
-  boxShadow: "0 12px 28px rgba(37,99,235,0.22)",
-};
-
-const ghostBtnStyle = (disabled) => ({
-  border: "1px solid rgba(148,163,184,0.5)",
-  background: "#fff",
-  color: "#0f172a",
-  padding: "10px 12px",
-  borderRadius: 12,
-  cursor: disabled ? "not-allowed" : "pointer",
-  fontWeight: 900,
-  opacity: disabled ? 0.7 : 1,
-});
-

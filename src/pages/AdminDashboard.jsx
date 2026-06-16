@@ -27,6 +27,10 @@ import AdminContactHistoryPanel, {
 } from "../components/AdminContactHistoryPanel";
 import AdminAppsSection from "../components/AdminAppsSection";
 import AdminAnnouncements from "../components/AdminAnnouncements";
+import AdminInviteModal from "../components/AdminInviteModal";
+import AdminRoleChangeModal from "../components/AdminRoleChangeModal";
+import AdminUserRoleBadge from "../components/AdminUserRoleBadge";
+import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, extractRowPanelRole } from "../utils/adminRoles";
 import {
   mergeMessages,
   normalizeTicketResponse,
@@ -496,6 +500,7 @@ function normalizeAdminUserRow(user) {
   const statusMeta = pickAccountStatusMeta(user);
   const ticketCount = pickOptionalTicketCount(user);
   const ticketsNav = pickTicketsNavQueryParts(user);
+  const panelRole = extractRowPanelRole(user);
   return {
     ...user,
     id:
@@ -518,6 +523,7 @@ function normalizeAdminUserRow(user) {
     status: statusMeta.label,
     ticketCount,
     ticketsNav,
+    panelRole,
     _raw: user,
   };
 }
@@ -832,6 +838,7 @@ export default function AdminDashboard() {
 
   const { brand, setBrand, resetBrand, defaultBrand } = useBrand();
   const { profile: user, logout, role } = useAuth();
+  const authProfile = user;
   const rawPhoto = extractProfilePhotoFromPayload(user);
   const profilePhotoUrl = rawPhoto ? resolveProfilePhotoUrl(rawPhoto) : "";
   const navigate = useNavigate();
@@ -846,12 +853,12 @@ export default function AdminDashboard() {
         : null
       : null;
 
-  // RBAC guard (backend is source of truth; UI must not spam retries for ROLE_USER).
+  // RBAC guard (backend is source of truth; UI must not spam retries for non-admin roles).
   useEffect(() => {
     const normalized = String(
       role || window.localStorage.getItem("ui-role") || "",
     ).toUpperCase();
-    if (normalized && normalized !== "ROLE_ADMIN") {
+    if (normalized && !canAccessAdminPanel(normalized)) {
       showError("Unauthorized: admin access required");
       navigate("/dashboard", {
         replace: true,
@@ -1305,6 +1312,11 @@ export default function AdminDashboard() {
   const activeTicketReplyRef = useRef({ active: false, seq: 0 });
   const [userSearchText, setUserSearchText] = useState("");
   const [userStatusFilter, setUserStatusFilter] = useState("All");
+  const [userRoleFilter, setUserRoleFilter] = useState("ALL");
+  const [inviteAdminOpen, setInviteAdminOpen] = useState(false);
+  const [roleChangeModalOpen, setRoleChangeModalOpen] = useState(false);
+  const [roleChangeTarget, setRoleChangeTarget] = useState(null);
+  const [roleChangeToRole, setRoleChangeToRole] = useState("");
   const [usersPage, setUsersPage] = useState(1);
   const [editingUser, setEditingUser] = useState(null);
   const [userEditForm, setUserEditForm] = useState({
@@ -1562,19 +1574,37 @@ export default function AdminDashboard() {
     [apiAdminUsers],
   );
 
+  const userRoleCounts = useMemo(
+    () => ({
+      all: normalizedAdminUsersList.length,
+      admin: normalizedAdminUsersList.filter((u) => u.panelRole === "ADMIN")
+        .length,
+      owner: normalizedAdminUsersList.filter((u) => u.panelRole === "OWNER")
+        .length,
+    }),
+    [normalizedAdminUsersList],
+  );
+
   const userManagementRows = useMemo(() => {
     const query = userSearchText.trim().toLowerCase();
     return normalizedAdminUsersList.filter((user) => {
       const matchesSearch =
         !query ||
-        `${user.id} ${user.name} ${user.email} ${user.phone} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
+        `${user.id} ${user.name} ${user.email} ${user.phone} ${user.panelRole ?? ""} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
           .toLowerCase()
           .includes(query);
       const matchesStatus =
         userStatusFilter === "All" || user.statusMeta?.key === userStatusFilter;
-      return matchesSearch && matchesStatus;
+      const matchesRole =
+        userRoleFilter === "ALL" || user.panelRole === userRoleFilter;
+      return matchesSearch && matchesStatus && matchesRole;
     });
-  }, [normalizedAdminUsersList, userSearchText, userStatusFilter]);
+  }, [
+    normalizedAdminUsersList,
+    userSearchText,
+    userStatusFilter,
+    userRoleFilter,
+  ]);
 
   const adminUsersDatasetEmpty =
     !apiAdminUsersLoading &&
@@ -1851,7 +1881,7 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     setUsersPage(1);
-  }, [userSearchText, userStatusFilter]);
+  }, [userSearchText, userStatusFilter, userRoleFilter]);
 
   useEffect(() => {
     if (usersPage > totalUserPages) {
@@ -2007,6 +2037,30 @@ export default function AdminDashboard() {
       return;
     }
     void performUserStatusUpdate(userId, true);
+  };
+
+  const handleManageRole = (targetUser) => {
+    if (!targetUser) return;
+    if (
+      !canActorManageUserRole(
+        role,
+        targetUser,
+        normalizedAdminUsersList,
+        authProfile,
+      )
+    ) {
+      showError("Role change is not permitted for this user.");
+      return;
+    }
+    setRoleChangeTarget(targetUser);
+    setRoleChangeToRole("");
+    setRoleChangeModalOpen(true);
+  };
+
+  const closeRoleChangeModal = () => {
+    setRoleChangeModalOpen(false);
+    setRoleChangeTarget(null);
+    setRoleChangeToRole("");
   };
 
   const handleUserView = (userId) => {
@@ -2778,24 +2832,56 @@ export default function AdminDashboard() {
         <>
         <section className="content-grid one-column">
           <article className="panel users-management-shell">
-            <div className="users-metrics-grid users-metrics-grid--compact">
-              <article className="users-metric-card">
-                <div className="users-metric-head">
-                  <span className="users-metric-icon users-metric-total">
-                    <Icon name="users" />
-                  </span>
-                  <p>Total Users</p>
-                </div>
-                <strong>{summaryTotals.totalUsers.toLocaleString()}</strong>
-                <p className="users-metric-source">From dashboard summary</p>
+            <div className="users-metrics-grid users-role-filter-grid">
+              <article
+                className={`users-metric-card users-role-filter-card${userRoleFilter === "ALL" ? " users-role-filter-card--active" : ""}`}
+              >
+                <button
+                  type="button"
+                  className="users-role-filter-btn"
+                  onClick={() => setUserRoleFilter("ALL")}
+                  aria-pressed={userRoleFilter === "ALL"}
+                >
+                  <div className="users-metric-head">
+                    <span className="users-metric-icon users-metric-total">
+                      <Icon name="users" />
+                    </span>
+                    <p>All Users</p>
+                  </div>
+                  <strong>{userRoleCounts.all.toLocaleString()}</strong>
+                </button>
               </article>
-              <article className="users-metric-card">
-                <div className="users-metric-head">
-                  <span className="users-metric-icon users-metric-active" />
-                  <p>Active Users</p>
-                </div>
-                <strong>{summaryTotals.activeUsers.toLocaleString()}</strong>
-                <p className="users-metric-source">From dashboard summary</p>
+              <article
+                className={`users-metric-card users-role-filter-card${userRoleFilter === "ADMIN" ? " users-role-filter-card--active" : ""}`}
+              >
+                <button
+                  type="button"
+                  className="users-role-filter-btn"
+                  onClick={() => setUserRoleFilter("ADMIN")}
+                  aria-pressed={userRoleFilter === "ADMIN"}
+                >
+                  <div className="users-metric-head">
+                    <span className="users-metric-icon users-metric-admin" />
+                    <p>Admins</p>
+                  </div>
+                  <strong>{userRoleCounts.admin.toLocaleString()}</strong>
+                </button>
+              </article>
+              <article
+                className={`users-metric-card users-role-filter-card${userRoleFilter === "OWNER" ? " users-role-filter-card--active" : ""}`}
+              >
+                <button
+                  type="button"
+                  className="users-role-filter-btn"
+                  onClick={() => setUserRoleFilter("OWNER")}
+                  aria-pressed={userRoleFilter === "OWNER"}
+                >
+                  <div className="users-metric-head">
+                    <span className="users-metric-icon users-metric-owner" />
+                    <p>Owners</p>
+                  </div>
+                  <strong>{userRoleCounts.owner.toLocaleString()}</strong>
+                </button>
               </article>
             </div>
 
@@ -2839,6 +2925,19 @@ export default function AdminDashboard() {
                 </select>
                 <button
                   type="button"
+                  className="users-invite-admin-btn"
+                  onClick={() => setInviteAdminOpen(true)}
+                  disabled={!canInviteAdmins(role)}
+                  title={
+                    canInviteAdmins(role)
+                      ? "Invite a new admin"
+                      : "Admin invite requires ADMIN or OWNER role"
+                  }
+                >
+                  Invite Admin
+                </button>
+                <button
+                  type="button"
                   className="users-export-btn"
                   onClick={() => handleUsersExport()}
                   disabled={!userManagementRows.length}
@@ -2858,6 +2957,7 @@ export default function AdminDashboard() {
                     <th scope="col">KYC</th>
                     <th scope="col">Tickets</th>
                     <th scope="col">Joined</th>
+                    <th scope="col">Role</th>
                     <th scope="col">Status</th>
                     <th scope="col">Actions</th>
                   </tr>
@@ -2893,6 +2993,9 @@ export default function AdminDashboard() {
                           </td>
                           <td>
                             <span className="skeleton sk-line sk-w-50" />
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-pill sk-w-40" />
                           </td>
                           <td>
                             <span className="skeleton sk-line sk-pill sk-w-40" />
@@ -2985,6 +3088,9 @@ export default function AdminDashboard() {
                       <td className="users-col-joined">
                         {user.joinedOnDisplay}
                       </td>
+                      <td className="users-col-role">
+                        <AdminUserRoleBadge role={user.panelRole} compact />
+                      </td>
                       <td>
                         <span
                           className={`status-badge users-status-pill ${user.statusMeta?.pillClass ?? "unknown"}`}
@@ -3018,6 +3124,20 @@ export default function AdminDashboard() {
                         >
                           View
                         </button>
+                        {canActorManageUserRole(
+                          role,
+                          user,
+                          normalizedAdminUsersList,
+                          authProfile,
+                        ) ? (
+                          <button
+                            type="button"
+                            className="users-row-action users-row-role"
+                            onClick={() => handleManageRole(user)}
+                          >
+                            Manage Role
+                          </button>
+                        ) : null}
                       </td>
                     </tr>
                   );
@@ -3027,7 +3147,7 @@ export default function AdminDashboard() {
                   usersEmptyMessage ? (
                     <tr>
                       <td
-                        colSpan={8}
+                        colSpan={9}
                         className="empty-table-row users-empty-table-msg"
                       >
                         {usersEmptyMessage}
@@ -3087,6 +3207,10 @@ export default function AdminDashboard() {
                   {editingUser.displayName} ·{" "}
                   <span className="kyc-mod-mono">{editingUser.id}</span>
                 </p>
+                <div className="users-view-role-row">
+                  <span className="kyc-mod-label">Role</span>
+                  <AdminUserRoleBadge role={editingUser.panelRole} />
+                </div>
                 <label className="kyc-mod-label" htmlFor="user-view-name">
                   Name
                 </label>
@@ -3116,6 +3240,23 @@ export default function AdminDashboard() {
                   readOnly
                 />
                 <div className="kyc-mod-modal-actions">
+                  {canActorManageUserRole(
+                    role,
+                    editingUser,
+                    normalizedAdminUsersList,
+                    authProfile,
+                  ) ? (
+                    <button
+                      type="button"
+                      className="users-page-btn users-page-btn--role"
+                      onClick={() => {
+                        closeUserEditModal();
+                        handleManageRole(editingUser);
+                      }}
+                    >
+                      Change Role
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     className="users-page-btn"
@@ -4491,6 +4632,26 @@ export default function AdminDashboard() {
 
         {renderPage()}
       </main>
+
+      <AdminInviteModal
+        open={inviteAdminOpen}
+        onClose={() => setInviteAdminOpen(false)}
+        inviterRole={role}
+        inviterEmail={user?.email || user?.userEmail || ""}
+        onInviteSent={() => setAdminUsersReloadSeq((n) => n + 1)}
+      />
+
+      <AdminRoleChangeModal
+        open={roleChangeModalOpen}
+        onClose={closeRoleChangeModal}
+        targetUser={roleChangeTarget}
+        toRole={roleChangeToRole}
+        actorRole={role}
+        allRows={normalizedAdminUsersList}
+        actorProfile={authProfile}
+        actorEmail={user?.email || user?.userEmail || ""}
+        onRoleChanged={() => setAdminUsersReloadSeq((n) => n + 1)}
+      />
     </div>
   );
 }

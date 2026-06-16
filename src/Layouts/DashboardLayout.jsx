@@ -161,7 +161,7 @@ export default function DashboardLayout() {
           boxShadow: "0 2px 20px rgba(37, 99, 235, 0.08)",
           position: "sticky",
           top: 0,
-          zIndex: 100,
+          zIndex: 1000,
           backdropFilter: "blur(10px)",
           display: "flex",
           flexDirection: "column",
@@ -524,12 +524,13 @@ export default function DashboardLayout() {
                 </div>
               )}
             </div>
-            <div
-              className="avatar-btn"
-              style={{
-                width: 40,
-                height: 40,
-                borderRadius: "50%",
+            <div style={{ position: "relative" }}>
+              <div
+                className="avatar-btn"
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: "50%",
                 background: "linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)",
                 color: "#fff",
                 display: "grid",
@@ -574,7 +575,8 @@ export default function DashboardLayout() {
               <span className="avatar-initials-fallback" style={{ display: profilePhotoUrl ? "none" : "inline" }}>
                 {initials}
               </span>
-              {showPopup && (
+            </div>
+            {showPopup && (
                 <div
                   style={{
                     position: "absolute",
@@ -697,6 +699,7 @@ export default function DashboardLayout() {
                   >
                     Logout
                   </button>
+
                 </div>
               )}
             </div>

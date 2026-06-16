@@ -37,7 +37,15 @@ export function normalizeAuthPath(url) {
 }
 
 export function isPublicAuthPath(url) {
-  return PUBLIC_AUTH_PATHS.has(normalizeAuthPath(url));
+  const p = normalizeAuthPath(url);
+  if (PUBLIC_AUTH_PATHS.has(p)) return true;
+  // Public admin invite acceptance (no Bearer — invited user has no session yet).
+  if (p === "/admin/invite/complete") return true;
+  if (/^\/admin\/invite\/[^/]+$/.test(p)) {
+    const segment = p.split("/").pop();
+    if (segment !== "request-otp" && segment !== "verify-otp") return true;
+  }
+  return false;
 }
 
 /**
@@ -56,7 +64,7 @@ export function urlIncludesVerifyOtp(url) {
 }
 
 const AUTH_UI_PATH_RE =
-  /^\/(login|forgot-password|reset-password|verify-email|register)(\/|$)/i;
+  /^\/(login|forgot-password|reset-password|verify-email|register|admin\/invite\/[^/]+)(\/|$)/i;
 
 export function isAuthFlowAppPath(pathname) {
   return AUTH_UI_PATH_RE.test(String(pathname || ""));

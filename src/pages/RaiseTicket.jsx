@@ -68,46 +68,26 @@ export default function RaiseTicket() {
   };
 
   return (
-    <div className="support-page" style={{ maxWidth: 920, margin: "0 auto", padding: 4 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-        <div>
-          <h1 className="support-title" style={{ margin: 0, fontSize: 26, letterSpacing: "-0.3px" }}>
-            Raise a ticket
-          </h1>
-          <div className="support-subtitle" style={{ marginTop: 4 }}>
-            Tell us what you need and we’ll get back quickly.
-          </div>
-        </div>
+    <div className="support-page">
+      <div className="support-top-bar">
+        <h2>Support Center</h2>
         <button
           type="button"
           onClick={handleBack}
-          className="support-action"
-          style={{
-            border: "1px solid rgba(148,163,184,0.5)",
-            background: "#fff",
-            borderRadius: 12,
-            padding: "10px 12px",
-            cursor: "pointer",
-            fontWeight: 950,
-            height: 42,
-          }}
+          className="support-back-btn"
         >
           ← Back to My tickets
         </button>
       </div>
 
-      <div className="ticket-raise-shell" style={{ marginTop: 14 }}>
-        <div
-          className="support-card"
-          style={{
-            marginTop: 0,
-            background: "linear-gradient(145deg, #ffffff 0%, #f8fbff 100%)",
-            borderRadius: 16,
-            padding: 18,
-            border: "1px solid rgba(37,99,235,0.12)",
-            boxShadow: "0 10px 26px rgba(15,23,42,0.08)",
-          }}
-        >
+      <div className="support-glass-container">
+        <div className="support-header-card">
+          <h1>Ticket details</h1>
+          <p className="subtitle">Tell us what you need and we'll get back quickly.</p>
+        </div>
+
+        <div className="ticket-raise-shell">
+          <div className="support-form-card">
           {error ? (
             <div
               style={{
@@ -124,8 +104,6 @@ export default function RaiseTicket() {
               {error}
             </div>
           ) : null}
-
-          <div className="support-divider" />
 
           <form
             onSubmit={(e) => {
@@ -177,19 +155,8 @@ export default function RaiseTicket() {
 
             <button
               type="submit"
-              disabled={!canSubmit}
-              className="support-btn"
-              style={{
-                border: "none",
-                borderRadius: 14,
-                padding: "12px 14px",
-                fontWeight: 950,
-                cursor: loading ? "not-allowed" : "pointer",
-                background: "linear-gradient(135deg, #2563eb, #1d4ed8)",
-                color: "#fff",
-                boxShadow: "0 14px 34px rgba(37,99,235,0.24)",
-                opacity: canSubmit ? 1 : 0.6,
-              }}
+              disabled={!canSubmit || loading}
+              className="support-submit-btn"
             >
               {loading ? "Submitting..." : "Submit ticket"}
             </button>
@@ -203,6 +170,7 @@ export default function RaiseTicket() {
           <span className="ticket-help-pill">Steps to reproduce (if possible)</span>
           <span className="ticket-help-pill">Screenshots (if available)</span>
         </aside>
+      </div>
       </div>
     </div>
   );
@@ -225,9 +193,9 @@ const fieldErrorStyle = {
 
 const inputStyle = (invalid) => ({
   width: "100%",
-  borderRadius: 14,
-  border: `1px solid ${invalid ? "#fecaca" : "rgba(148,163,184,0.6)"}`,
-  padding: "12px 12px",
+  borderRadius: 12,
+  border: `1px solid ${invalid ? "#fecaca" : "#d1d5db"}`,
+  padding: "14px 18px",
   outline: "none",
   background: "#fff",
   boxShadow: invalid ? "0 0 0 3px rgba(239,68,68,0.12)" : "none",

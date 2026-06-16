@@ -46,10 +46,11 @@ function normalizeRoleClaim(value) {
   return "";
 }
 
-/** Map API/JWT hints to `ROLE_USER` | `ROLE_ADMIN` | other `ROLE_*`. */
+/** Map API/JWT hints to `ROLE_USER` | `ROLE_ADMIN` | `ROLE_OWNER` | other `ROLE_*`. */
 function toCanonicalRole(raw) {
   const s = String(raw || "").trim().toUpperCase();
   if (!s) return "";
+  if (s.includes("ROLE_OWNER") || s === "OWNER") return "ROLE_OWNER";
   if (s.includes("ROLE_ADMIN")) return "ROLE_ADMIN";
   if (s.includes("ROLE_USER")) return "ROLE_USER";
   if (s === "ADMIN") return "ROLE_ADMIN";
