@@ -96,8 +96,9 @@ export default function AdminInviteModal({
     try {
       const verifyRes = await adminInviteBackend.verifyOtp({ otp: otpVal });
       const token =
+        verifyRes?.data?.inviteActionToken ??
         verifyRes?.inviteActionToken ??
-        verifyRes?.actionToken ??
+        verifyRes?.data?.token ??
         verifyRes?.token ??
         "";
       if (!token) {
@@ -111,6 +112,7 @@ export default function AdminInviteModal({
         inviteActionToken: token,
       });
       showSuccess(`Invitation sent to ${email.trim()}`);
+      setInviteActionToken("");
       onInviteSent?.();
       onClose?.();
     } catch (err) {

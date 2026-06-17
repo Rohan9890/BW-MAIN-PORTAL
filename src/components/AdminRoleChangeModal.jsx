@@ -147,8 +147,9 @@ export default function AdminRoleChangeModal({
     try {
       const verifyRes = await adminRoleBackend.verifyOtp({ otp: otpVal });
       const token =
+        verifyRes?.data?.roleChangeActionToken ??
         verifyRes?.roleChangeActionToken ??
-        verifyRes?.actionToken ??
+        verifyRes?.data?.token ??
         verifyRes?.token ??
         "";
       if (!token) {
