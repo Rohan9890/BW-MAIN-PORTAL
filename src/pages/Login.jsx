@@ -74,9 +74,14 @@ export default function Login() {
     const msg = location.state?.message;
     if (typeof msg === "string" && msg.trim()) {
       setInfoMessage(msg.trim());
+    }
+    if (location.state?.adminMode) {
+      setLoginMode("admin");
+    }
+    if (location.state) {
       navigate(location.pathname, { replace: true, state: null });
     }
-  }, []);
+  }, [location, navigate]);
 
   const canSubmitLogin =
     !loading && validateEmail(form.email) && form.password.trim().length > 0;

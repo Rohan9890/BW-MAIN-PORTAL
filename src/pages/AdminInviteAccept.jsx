@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import Logo from "../components/Logo";
 import { adminInviteBackend } from "../services/adminInviteBackend";
 import { getApiErrorMessage } from "../services/backendClient";
@@ -12,10 +12,11 @@ function validatePassword(value) {
 
 /**
  * Public route: invited admin sets password and completes onboarding.
- * Token is read from URL only — never logged.
+ * Token is read from URL path or query parameter - never logged.
  */
 export default function AdminInviteAccept() {
   const { token: routeToken } = useParams();
+  const { search } = useLocation();
   const navigate = useNavigate();
 
   const [phase, setPhase] = useState("loading");
@@ -26,10 +27,15 @@ export default function AdminInviteAccept() {
   const [fieldErrors, setFieldErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
-  const token = useMemo(
-    () => String(routeToken || "").trim(),
-    [routeToken],
-  );
+  const token = useMemo(() => {
+    const pathToken = String(routeToken || "").trim();
+    if (pathToken && pathToken !== "accept") {
+      return pathToken;
+    }
+    const searchParams = new URLSearchParams(search);
+    const searchToken = searchParams.get("token");
+    return String(searchToken || "").trim();
+  }, [routeToken, search]);
 
   useEffect(() => {
     if (!token) {
