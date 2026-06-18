@@ -2,7 +2,7 @@
  * Single source of truth for API origin + `/api/v1.0` prefix.
  *
  * **`VITE_API_URL`** — canonical backend origin (scheme + host + port only, no path).
- * Example: `http://43.205.116.38:8080`
+ * Example: `https://boldandwise.duckdns.org`
  *
  * **`VITE_API_BASE_URL`** — legacy alias for the same value (optional).
  *

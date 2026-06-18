@@ -11,7 +11,7 @@ const PRESIGNED = (path, sig = "sig1") =>
   `${S3_BASE}/${path}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=${sig}&X-Amz-Expires=3600`;
 
 beforeAll(() => {
-  vi.stubEnv("VITE_API_URL", "http://43.205.116.38:8080");
+  vi.stubEnv("VITE_API_URL", "https://boldandwise.duckdns.org");
 });
 
 describe("getAdminKycDocumentPreviewSlots", () => {
@@ -129,7 +129,7 @@ describe("getAdminKycDocumentPreviewSlots", () => {
     // still hold the original (stale) upload.
     const currentFace = PRESIGNED("kyc/598adf82-face.jpg", "sig1");
     const staleOriginal =
-      "http://43.205.116.38:8080/uploads/documents/86cc00eb-65fb-4980-original.png";
+      "https://boldandwise.duckdns.org/uploads/documents/86cc00eb-65fb-4980-original.png";
     const anotherFile = PRESIGNED("kyc/c6244724-another.jpeg", "sig2");
 
     const slots = getAdminKycDocumentPreviewSlots({
@@ -151,7 +151,7 @@ describe("getAdminKycDocumentPreviewSlots", () => {
   it("shows stale aadhaarFrontUrl as previous when frontDocumentUrl differs and status is REJECTED", () => {
     const currentFace = PRESIGNED("kyc/598adf82-face.jpg", "sig1");
     const staleOriginal =
-      "http://43.205.116.38:8080/uploads/documents/86cc00eb-65fb-4980-original.png";
+      "https://boldandwise.duckdns.org/uploads/documents/86cc00eb-65fb-4980-original.png";
 
     const slots = getAdminKycDocumentPreviewSlots({
       frontDocumentUrl: currentFace,

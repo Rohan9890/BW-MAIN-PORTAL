@@ -10,7 +10,7 @@ const PRIVATE_S3 =
   "https://authify-kyc-prod.s3.ap-south-1.amazonaws.com/kyc/front.jpg";
 
 beforeAll(() => {
-  vi.stubEnv("VITE_API_URL", "http://43.205.116.38:8080");
+  vi.stubEnv("VITE_API_URL", "https://boldandwise.duckdns.org");
 });
 
 describe("resolveKycDocumentCandidates", () => {

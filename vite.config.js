@@ -8,7 +8,7 @@ function trimOrigin(v) {
 }
 
 /** Falls back to deployed API when env is unset (same default as `apiConfig.js`). */
-const DEFAULT_PROXY_TARGET = "http://43.205.116.38:8080";
+const DEFAULT_PROXY_TARGET = "https://boldandwise.duckdns.org";
 
 /**
  * Build-time plugin: abort `npm run build` immediately if VITE_API_URL is missing
