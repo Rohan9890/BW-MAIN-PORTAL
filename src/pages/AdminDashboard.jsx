@@ -1297,10 +1297,6 @@ export default function AdminDashboard() {
       try {
         const list = await adminDashboardApi.listUsers();
         if (!alive) return;
-        if (Array.isArray(list) && list.length > 0) {
-          // eslint-disable-next-line no-console
-          console.log("[BW-PORTAL] Raw admin user sample payload from backend:", list[0]);
-        }
         setApiAdminUsers(Array.isArray(list) ? list : []);
       } catch (err) {
         if (!alive) return;
@@ -1463,29 +1459,6 @@ export default function AdminDashboard() {
     });
   }, [adminStats, summaryTotals]);
 
-  useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    // eslint-disable-next-line no-console
-    console.groupCollapsed("[DASHBOARD_SUMMARY_AUDIT] UI pipeline");
-    // eslint-disable-next-line no-console
-    console.log("A) `summary` state (object from getSummary)", summary);
-    // eslint-disable-next-line no-console
-    console.log(
-      "B) `summaryTotals` (toFiniteNumber applied in AdminDashboard)",
-      summaryTotals,
-    );
-    // eslint-disable-next-line no-console
-    console.log(
-      "C) `dashboardAdminStats` card values (template + KPI overrides)",
-      (dashboardAdminStats || []).map((c) => ({
-        label: c.label,
-        value: c.value,
-      })),
-    );
-    // eslint-disable-next-line no-console
-    console.groupEnd();
-  }, [summary, summaryTotals, dashboardAdminStats]);
-
   const chartData = useMemo(() => {
     // API contract: [{ date, count }]. Keep support for numeric arrays too.
     if (Array.isArray(apiUserGrowth) && apiUserGrowth.length) {
@@ -1501,16 +1474,6 @@ export default function AdminDashboard() {
     () => buildGrowthChartModel(chartData),
     [chartData],
   );
-
-  useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    // eslint-disable-next-line no-console
-    console.log("[DASHBOARD_GROWTH_AUDIT]", {
-      rawApiUserGrowth: apiUserGrowth,
-      normalizedChartData: chartData,
-      renderModel: growthChartModel,
-    });
-  }, [apiUserGrowth, chartData, growthChartModel]);
 
   const dashboardUserGrowth = useMemo(
     () => chartData.map((item) => item.users),
@@ -1618,17 +1581,10 @@ export default function AdminDashboard() {
   }, [searchQuery, dashboardRecentUsers]);
 
   const normalizedAdminUsersList = useMemo(
-    () => {
-      const result = (Array.isArray(apiAdminUsers) ? apiAdminUsers : []).map(
+    () =>
+      (Array.isArray(apiAdminUsers) ? apiAdminUsers : []).map(
         normalizeAdminUserRow,
-      );
-      console.log("NORMALIZED USERS", result);
-      console.log(
-        "NORMALIZED ROLE VALUES",
-        result.map((u) => u.panelRole)
-      );
-      return result;
-    },
+      ),
     [apiAdminUsers],
   );
 

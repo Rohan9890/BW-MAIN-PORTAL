@@ -115,39 +115,6 @@ function buildSummaryFlatFromLayers(layers) {
   return flat;
 }
 
-function logDashboardSummaryKpiAuditDev({ res, unwrapInput, layers, flat, normalized, usedFallback }) {
-  if (!IS_DEV) return;
-  const provenance = {};
-  for (const key of ["totalUsers", "totalApps", "openTickets", "activeUsers", "verifiedUsers"]) {
-    const hit =
-      key === "verifiedUsers" ? pickBestCountKpi(layers, key) : pickFirstPresentKpi(layers, key);
-    provenance[key] =
-      hit.value === undefined
-        ? "(absent on all inspected layers)"
-        : `layers[${hit.layerIndex}].${key} = ${JSON.stringify(hit.value)}${
-            key === "verifiedUsers" ? " (positive-first)" : " (shallow-first)"
-          }`;
-  }
-  // eslint-disable-next-line no-console
-  console.groupCollapsed("[DASHBOARD_SUMMARY_AUDIT]");
-  // eslint-disable-next-line no-console
-  console.log("1) post-envelope `res` from backendJson(/admin/dashboard/summary)", res);
-  // eslint-disable-next-line no-console
-  console.log("2) unwrap input (res?.data ?? res)", unwrapInput);
-  // eslint-disable-next-line no-console
-  console.log("3) inspection layers (outer → inner; stats blobs inlined)", layers);
-  // eslint-disable-next-line no-console
-  console.log("4) flat KPI picks fed into normalizeSummaryNumbers()", flat);
-  // eslint-disable-next-line no-console
-  console.log("5) field provenance (per-key pick rule)", provenance);
-  // eslint-disable-next-line no-console
-  console.log("6) normalized summary → AdminDashboard cards", normalized);
-  // eslint-disable-next-line no-console
-  console.log("7) DEV legacy adminApi/mock fallback used?", Boolean(usedFallback));
-  // eslint-disable-next-line no-console
-  console.groupEnd();
-}
-
 /**
  * `activeUsers ?? verifiedUsers` fails when backend sends `activeUsers: 0` as a placeholder
  * while `verifiedUsers` holds the real verified/active count — `??` keeps 0.
@@ -201,14 +168,6 @@ export const adminDashboardApi = {
       const layers = collectSummaryInspectionLayers(unwrapInput);
       const flat = buildSummaryFlatFromLayers(layers);
       const normalized = normalizeSummaryNumbers(flat);
-      logDashboardSummaryKpiAuditDev({
-        res,
-        unwrapInput,
-        layers,
-        flat,
-        normalized,
-        usedFallback: false,
-      });
       return normalized;
     } catch (err) {
       console.warn("[adminDashboardApi] getSummary failed", err);
@@ -223,14 +182,6 @@ export const adminDashboardApi = {
       const layers = collectSummaryInspectionLayers(unwrapInput);
       const flat = buildSummaryFlatFromLayers(layers);
       const normalized = normalizeSummaryNumbers(flat);
-      logDashboardSummaryKpiAuditDev({
-        res: raw,
-        unwrapInput,
-        layers,
-        flat,
-        normalized,
-        usedFallback: true,
-      });
       return normalized;
     }
   },
@@ -300,7 +251,6 @@ export const adminDashboardApi = {
       method: "GET",
       suppressGlobalServerErrorToast: true,
     });
-    console.log("RAW ADMIN RESPONSE", res);
     let list;
     if (Array.isArray(res)) list = res;
     else {
@@ -310,11 +260,6 @@ export const adminDashboardApi = {
       else if (Array.isArray(data?.items)) list = data.items;
       else list = unwrapArray(res);
     }
-    console.log("RAW USERS ARRAY", list);
-    console.log("FIRST USER", list?.[0]);
-    console.log("ROLE VALUES", (list || []).map((u) => ({
-      rawRole: u.role || u.adminRole || u.userRole || u.type,
-    })));
     return list;
   },
 
