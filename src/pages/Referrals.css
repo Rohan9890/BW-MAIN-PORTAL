@@ -1,0 +1,237 @@
+.referrals-page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.referrals-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.referrals-header h1 {
+  margin: 0 0 6px;
+  font-size: 28px;
+  letter-spacing: -0.4px;
+  color: #0f172a;
+}
+
+.referrals-sub {
+  margin: 0;
+  color: #64748b;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.referrals-profile-link {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.referrals-empty {
+  border: 1px dashed #cbd5e1;
+  border-radius: 14px;
+  background: #f8fafc;
+  padding: 28px 24px;
+  text-align: center;
+}
+
+.referrals-empty-title {
+  margin: 0 0 6px;
+  font-size: 18px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.referrals-empty-sub {
+  margin: 0 0 16px;
+  color: #64748b;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.referrals-copy-link-btn {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 10px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.referrals-copy-link-btn:hover {
+  background: #dbeafe;
+}
+
+.referrals-empty-link-preview {
+  display: block;
+  margin-top: 14px;
+  font-size: 11px;
+  color: #64748b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.referrals-empty-hint {
+  margin: 0;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.referrals-empty-hint a {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.referrals-profile-link:hover {
+  background: #dbeafe;
+}
+
+.referrals-table-wrap {
+  overflow-x: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+.referrals-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.referrals-table th,
+.referrals-table td {
+  padding: 12px 16px;
+  text-align: left;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.referrals-table th {
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.referrals-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.referrals-col-name {
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.referrals-user-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  color: #334155;
+  background: #f1f5f9;
+  padding: 3px 8px;
+  border-radius: 6px;
+}
+
+.referrals-col-joined {
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.referrals-card-list {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  gap: 10px;
+}
+
+.referrals-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05);
+}
+
+.referrals-card-name {
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.referrals-card-joined {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .referrals-page {
+    padding: 16px;
+  }
+
+  .referrals-header {
+    flex-direction: column;
+  }
+
+  .referrals-table-wrap {
+    display: none;
+  }
+
+  .referrals-card-list {
+    display: grid;
+  }
+
+  .referrals-col-joined {
+    display: none;
+  }
+}
+
+html[data-theme="dark"] .referrals-header h1,
+html[data-theme="dark"] .referrals-col-name,
+html[data-theme="dark"] .referrals-card-name {
+  color: #e2e8f0;
+}
+
+html[data-theme="dark"] .referrals-table-wrap,
+html[data-theme="dark"] .referrals-card {
+  background: #0f172a;
+  border-color: #334155;
+}
+
+html[data-theme="dark"] .referrals-table th {
+  background: #111827;
+  color: #94a3b8;
+}
+
+html[data-theme="dark"] .referrals-table td {
+  border-bottom-color: #1f2937;
+  color: #cbd5e1;
+}
+
+html[data-theme="dark"] .referrals-user-id {
+  background: #1e293b;
+  color: #e2e8f0;
+}

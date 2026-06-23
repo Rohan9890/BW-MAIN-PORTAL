@@ -30,7 +30,13 @@ import AdminAnnouncements from "../components/AdminAnnouncements";
 import AdminInviteModal from "../components/AdminInviteModal";
 import AdminRoleChangeModal from "../components/AdminRoleChangeModal";
 import AdminUserRoleBadge from "../components/AdminUserRoleBadge";
-import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, extractRowPanelRole } from "../utils/adminRoles";
+import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, normalizePanelRole } from "../utils/adminRoles";
+import { buildCsvContent } from "../utils/csvExport";
+import {
+  DIRECT_SIGNUP_LABEL,
+  isDirectSignup,
+  normalizeReferredByDisplay,
+} from "../utils/referralDisplay";
 import {
   mergeMessages,
   normalizeTicketResponse,
@@ -489,8 +495,31 @@ function normalizeAdminUserRow(user) {
   const externalUserId = extractAdminUserExternalId(user);
   const listId = toStringSafe(user?.id ?? user?.userId, "").trim();
   const id = listId || externalUserId || "";
-  const displayName = resolveUserDisplayName(user);
-  const email = toStringSafe(user?.email ?? user?.userEmail, "").trim();
+  
+  const partA = user?.firstName != null ? String(user.firstName).trim() : "";
+  const partB = user?.lastName != null ? String(user.lastName).trim() : "";
+  const fromParts = [partA, partB].filter(Boolean).join(" ").trim();
+  const fullNameRaw =
+    String(user?.fullName || "").trim() ||
+    fromParts ||
+    String(user?.name || "").trim() ||
+    String(user?.displayName || "").trim() ||
+    String(user?.user?.name || "").trim() ||
+    String(user?.profile?.name || "").trim() ||
+    "Unknown User";
+  const fullName = fullNameRaw || "Unknown User";
+
+  const emailRaw = toStringSafe(
+    user?.email ??
+    user?.userEmail ??
+    user?.user?.email ??
+    user?.profile?.email ??
+    user?.username ??
+    "",
+    ""
+  ).trim();
+  const email = emailRaw || "—";
+
   const joinedRaw =
     user?.joinedOn ?? user?.createdAt ?? user?.registeredAt ?? "";
   const joinedOnDisplay = formatJoinedDate(joinedRaw);
@@ -500,19 +529,36 @@ function normalizeAdminUserRow(user) {
   const statusMeta = pickAccountStatusMeta(user);
   const ticketCount = pickOptionalTicketCount(user);
   const ticketsNav = pickTicketsNavQueryParts(user);
-  const panelRole = extractRowPanelRole(user);
+  
+  const rawRole =
+    user?.panelRole ??
+    user?.role ??
+    user?.userRole ??
+    user?.adminRole ??
+    user?.type;
+  const panelRole = normalizePanelRole(rawRole) || "ROLE_USER";
+
+  const referredByNested = user?.referredBy;
+  const referredByUserId = normalizeReferredByDisplay(
+    user?.referredByUserId ??
+      user?.referrerUserId ??
+      referredByNested?.userId ??
+      referredByNested?.id,
+  );
+
   return {
     ...user,
     id:
       id ||
       email ||
-      displayName ||
+      fullName ||
       crypto.randomUUID?.() ||
       `u_${Math.random()}`,
     userId: externalUserId || toStringSafe(user?.userId ?? user?.user_id, "").trim() || id,
-    displayName,
-    name: displayName,
-    email: email || "—",
+    displayName: fullName,
+    name: fullName,
+    fullName,
+    email,
     phone,
     joinedOnDisplay,
     /** Same formatted value as `joinedOnDisplay` for table cells that expect `joinedOn`. */
@@ -524,6 +570,7 @@ function normalizeAdminUserRow(user) {
     ticketCount,
     ticketsNav,
     panelRole,
+    referredByUserId,
     _raw: user,
   };
 }
@@ -1250,6 +1297,10 @@ export default function AdminDashboard() {
       try {
         const list = await adminDashboardApi.listUsers();
         if (!alive) return;
+        if (Array.isArray(list) && list.length > 0) {
+          // eslint-disable-next-line no-console
+          console.log("[BW-PORTAL] Raw admin user sample payload from backend:", list[0]);
+        }
         setApiAdminUsers(Array.isArray(list) ? list : []);
       } catch (err) {
         if (!alive) return;
@@ -1567,19 +1618,26 @@ export default function AdminDashboard() {
   }, [searchQuery, dashboardRecentUsers]);
 
   const normalizedAdminUsersList = useMemo(
-    () =>
-      (Array.isArray(apiAdminUsers) ? apiAdminUsers : []).map(
+    () => {
+      const result = (Array.isArray(apiAdminUsers) ? apiAdminUsers : []).map(
         normalizeAdminUserRow,
-      ),
+      );
+      console.log("NORMALIZED USERS", result);
+      console.log(
+        "NORMALIZED ROLE VALUES",
+        result.map((u) => u.panelRole)
+      );
+      return result;
+    },
     [apiAdminUsers],
   );
 
   const userRoleCounts = useMemo(
     () => ({
       all: normalizedAdminUsersList.length,
-      admin: normalizedAdminUsersList.filter((u) => u.panelRole === "ADMIN")
+      admin: normalizedAdminUsersList.filter((u) => u.panelRole === "ROLE_ADMIN")
         .length,
-      owner: normalizedAdminUsersList.filter((u) => u.panelRole === "OWNER")
+      owner: normalizedAdminUsersList.filter((u) => u.panelRole === "ROLE_OWNER")
         .length,
     }),
     [normalizedAdminUsersList],
@@ -1590,13 +1648,15 @@ export default function AdminDashboard() {
     return normalizedAdminUsersList.filter((user) => {
       const matchesSearch =
         !query ||
-        `${user.id} ${user.name} ${user.email} ${user.phone} ${user.panelRole ?? ""} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
+        `${user.id} ${user.name} ${user.email} ${user.phone} ${user.panelRole ?? ""} ${user.referredByUserId ?? ""} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
           .toLowerCase()
           .includes(query);
       const matchesStatus =
         userStatusFilter === "All" || user.statusMeta?.key === userStatusFilter;
       const matchesRole =
-        userRoleFilter === "ALL" || user.panelRole === userRoleFilter;
+        userRoleFilter === "ALL" ||
+        user.panelRole === `ROLE_${userRoleFilter}` ||
+        user.panelRole === userRoleFilter;
       return matchesSearch && matchesStatus && matchesRole;
     });
   }, [
@@ -2092,24 +2152,31 @@ export default function AdminDashboard() {
       showError("No users to export.");
       return;
     }
-    const header = ["ID", "Name", "Email", "Phone", "KYC", "Joined", "Status"];
-    const csvLines = [
-      header.join(","),
-      ...rows.map((user) =>
-        [
-          user.id,
-          user.name,
-          user.email,
-          user.phone,
-          user.kycPill?.label ?? "—",
-          user.joinedOnDisplay ?? "—",
-          user.statusMeta?.label ?? user.status ?? "—",
-        ]
-          .map((cell) => `"${String(cell).replaceAll('"', '""')}"`)
-          .join(","),
-      ),
+    const header = [
+      "ID",
+      "Name",
+      "Email",
+      "Phone",
+      "KYC",
+      "Joined",
+      "Role",
+      "Referred By",
+      "Status",
     ];
-    const blob = new Blob([csvLines.join("\n")], {
+    const csvBody = rows.map((user) => [
+      user.id,
+      user.name,
+      user.email,
+      user.phone,
+      user.kycPill?.label ?? "—",
+      user.joinedOnDisplay ?? "—",
+      user.panelRole?.replace(/^ROLE_/, "") ?? "USER",
+      user.referredByUserId ?? DIRECT_SIGNUP_LABEL,
+      user.statusMeta?.label ?? user.status ?? "—",
+    ]);
+    const blob = new Blob(
+      [buildCsvContent(header, csvBody)],
+      {
       type: "text/csv;charset=utf-8;",
     });
     const url = window.URL.createObjectURL(blob);
@@ -2907,6 +2974,7 @@ export default function AdminDashboard() {
                 placeholder="Search name, email, phone…"
                 value={userSearchText}
                 onChange={(event) => setUserSearchText(event.target.value)}
+                autoComplete="off"
               />
 
               <div className="users-controls-right">
@@ -2958,6 +3026,7 @@ export default function AdminDashboard() {
                     <th scope="col">Tickets</th>
                     <th scope="col">Joined</th>
                     <th scope="col">Role</th>
+                    <th scope="col">Referred By</th>
                     <th scope="col">Status</th>
                     <th scope="col">Actions</th>
                   </tr>
@@ -2996,6 +3065,9 @@ export default function AdminDashboard() {
                           </td>
                           <td>
                             <span className="skeleton sk-line sk-pill sk-w-40" />
+                          </td>
+                          <td>
+                            <span className="skeleton sk-line sk-w-55" />
                           </td>
                           <td>
                             <span className="skeleton sk-line sk-pill sk-w-40" />
@@ -3091,6 +3163,18 @@ export default function AdminDashboard() {
                       <td className="users-col-role">
                         <AdminUserRoleBadge role={user.panelRole} compact />
                       </td>
+                      <td className="users-col-referred-by">
+                        <span
+                          className={`user-referred-by-id${isDirectSignup(user.referredByUserId) ? " user-referred-by-id--direct" : ""}`}
+                          title={
+                            isDirectSignup(user.referredByUserId)
+                              ? "No referral attribution"
+                              : user.referredByUserId
+                          }
+                        >
+                          {user.referredByUserId}
+                        </span>
+                      </td>
                       <td>
                         <span
                           className={`status-badge users-status-pill ${user.statusMeta?.pillClass ?? "unknown"}`}
@@ -3124,20 +3208,6 @@ export default function AdminDashboard() {
                         >
                           View
                         </button>
-                        {canActorManageUserRole(
-                          role,
-                          user,
-                          normalizedAdminUsersList,
-                          authProfile,
-                        ) ? (
-                          <button
-                            type="button"
-                            className="users-row-action users-row-role"
-                            onClick={() => handleManageRole(user)}
-                          >
-                            Manage Role
-                          </button>
-                        ) : null}
                       </td>
                     </tr>
                   );
@@ -3147,7 +3217,7 @@ export default function AdminDashboard() {
                   usersEmptyMessage ? (
                     <tr>
                       <td
-                        colSpan={9}
+                        colSpan={10}
                         className="empty-table-row users-empty-table-msg"
                       >
                         {usersEmptyMessage}

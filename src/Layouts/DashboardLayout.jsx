@@ -79,8 +79,10 @@ export default function DashboardLayout() {
 
   const handleOptionClick = (option) => {
     setShowPopup(false);
-    if (option === "My Profile") {
+    if (option === "Profile" || option === "My Profile") {
       navigate("/profile");
+    } else if (option === "Referrals") {
+      navigate("/referrals");
     } else if (option === "Settings") {
       navigate("/settings");
     } else if (option === "Logout") {
@@ -648,7 +650,7 @@ export default function DashboardLayout() {
                   </div>
                   <button
                     className="popup-btn"
-                    onClick={() => handleOptionClick("My Profile")}
+                    onClick={() => handleOptionClick("Profile")}
                     style={{
                       background: "transparent",
                       border: "none",
@@ -662,7 +664,25 @@ export default function DashboardLayout() {
                       transition: "all 0.15s",
                     }}
                   >
-                    My Profile
+                    Profile
+                  </button>
+                  <button
+                    className="popup-btn"
+                    onClick={() => handleOptionClick("Referrals")}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      padding: "11px 16px",
+                      textAlign: "left",
+                      cursor: "pointer",
+                      borderBottom: "1px solid #f8fafc",
+                      color: "#334155",
+                      fontSize: 13,
+                      fontWeight: 500,
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    Referrals
                   </button>
                   <button
                     className="popup-btn"

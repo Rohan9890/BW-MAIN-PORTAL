@@ -300,12 +300,22 @@ export const adminDashboardApi = {
       method: "GET",
       suppressGlobalServerErrorToast: true,
     });
-    if (Array.isArray(res)) return res;
-    const data = res?.data ?? res;
-    if (Array.isArray(data)) return data;
-    if (Array.isArray(data?.content)) return data.content;
-    if (Array.isArray(data?.items)) return data.items;
-    return unwrapArray(res);
+    console.log("RAW ADMIN RESPONSE", res);
+    let list;
+    if (Array.isArray(res)) list = res;
+    else {
+      const data = res?.data ?? res;
+      if (Array.isArray(data)) list = data;
+      else if (Array.isArray(data?.content)) list = data.content;
+      else if (Array.isArray(data?.items)) list = data.items;
+      else list = unwrapArray(res);
+    }
+    console.log("RAW USERS ARRAY", list);
+    console.log("FIRST USER", list?.[0]);
+    console.log("ROLE VALUES", (list || []).map((u) => ({
+      rawRole: u.role || u.adminRole || u.userRole || u.type,
+    })));
+    return list;
   },
 
   /** GET /admin/users/:id — single user detail (resolves external USR-/ADM- id). */

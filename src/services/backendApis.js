@@ -208,6 +208,13 @@ export const profileBackend = {
     fd.append("file", file);
     return backendMultipart("/profile/upload-photo", fd);
   },
+  /** GET /referrals/list — returns users referred by the authenticated JWT subject only (no client userId). */
+  getReferrals() {
+    return backendJson("/referrals/list", {
+      method: "GET",
+      suppressGlobalServerErrorToast: true,
+    });
+  },
   /** @deprecated Not deployed — use PUT /profile for phone; email via admin/support. */
   updateContactInit(payload) {
     return backendJson("/profile/update-contact/init", {

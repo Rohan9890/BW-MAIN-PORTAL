@@ -29,6 +29,7 @@ const UserDashboard = lazy(() => import("./pages/UserDashboard"));
 const TicketCenter = lazy(() => import("./pages/TicketCenter"));
 const RaiseTicket = lazy(() => import("./pages/RaiseTicket"));
 const TicketDetail = lazy(() => import("./pages/TicketDetail"));
+const Referrals = lazy(() => import("./pages/Referrals"));
 
 function RouteLoader({ label }) {
   return (
@@ -156,6 +157,14 @@ export default function App() {
             <Route path="/my-apps" element={<MyApps />} />
             <Route path="/favorites" element={<Favorites />} />
             <Route path="/profile" element={<Profile />} />
+            <Route
+              path="/referrals"
+              element={
+                <Suspense fallback={<RouteLoader label="Loading referrals..." />}>
+                  <Referrals />
+                </Suspense>
+              }
+            />
             <Route path="/settings" element={<Settings />} />
             <Route path="/activity" element={<Activity />} />
           </Route>

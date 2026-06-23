@@ -24,8 +24,8 @@ export default function AdminInviteModal({
   onInviteSent,
 }) {
   const [step, setStep] = useState("details");
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
   const [role, setRole] = useState("ADMIN");
   const [otp, setOtp] = useState("");
   const [inviteActionToken, setInviteActionToken] = useState("");
@@ -36,8 +36,8 @@ export default function AdminInviteModal({
 
   const resetForm = useCallback(() => {
     setStep("details");
-    setFullName("");
-    setEmail("");
+    setInviteName("");
+    setInviteEmail("");
     setRole("ADMIN");
     setOtp("");
     setInviteActionToken("");
@@ -60,8 +60,8 @@ export default function AdminInviteModal({
 
   const validateDetails = () => {
     const errs = {};
-    if (!String(fullName || "").trim()) errs.fullName = "Full name is required.";
-    if (!validateEmail(email)) errs.email = "Enter a valid email address.";
+    if (!String(inviteName || "").trim()) errs.fullName = "Full name is required.";
+    if (!validateEmail(inviteEmail)) errs.email = "Enter a valid email address.";
     if (!["ADMIN", "OWNER"].includes(role)) errs.role = "Invalid role.";
     if (role === "OWNER" && !allowOwnerRole) {
       errs.role = "Only an existing owner can invite another owner.";
@@ -106,12 +106,12 @@ export default function AdminInviteModal({
       }
       setInviteActionToken(token);
       await adminInviteBackend.createInvite({
-        fullName: String(fullName).trim(),
-        email: String(email).trim().toLowerCase(),
+        fullName: String(inviteName).trim(),
+        email: String(inviteEmail).trim().toLowerCase(),
         role,
         inviteActionToken: token,
       });
-      showSuccess(`Invitation sent to ${email.trim()}`);
+      showSuccess(`Invitation sent to ${inviteEmail.trim()}`);
       setInviteActionToken("");
       onInviteSent?.();
       onClose?.();
@@ -124,6 +124,9 @@ export default function AdminInviteModal({
 
   if (!open) return null;
 
+  // Generic handler helper to stop propagation of input events
+  const stopProp = (e) => e.stopPropagation();
+
   return (
     <div
       className="kyc-mod-modal-backdrop"
@@ -131,6 +134,8 @@ export default function AdminInviteModal({
       onClick={(e) => {
         if (e.target === e.currentTarget && !loading) onClose?.();
       }}
+      onKeyDown={stopProp}
+      onKeyUp={stopProp}
     >
       <div className="kyc-mod-modal admin-invite-modal" role="dialog" aria-modal="true">
         <h3 className="kyc-mod-modal-title">
@@ -144,29 +149,42 @@ export default function AdminInviteModal({
 
         {step === "details" ? (
           <div className="admin-invite-form">
-            <label className="admin-invite-label">
+            <label className="admin-invite-label" htmlFor="invite-admin-name">
               Full name
               <input
+                id="invite-admin-name"
                 type="text"
                 className="admin-invite-input"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
+                value={inviteName}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  setInviteName(e.target.value);
+                }}
+                onKeyDown={stopProp}
+                onKeyUp={stopProp}
                 disabled={loading}
-                autoComplete="name"
+                autoComplete="off"
+                autoFocus
               />
               {fieldErrors.fullName ? (
                 <span className="admin-invite-error">{fieldErrors.fullName}</span>
               ) : null}
             </label>
-            <label className="admin-invite-label">
+            <label className="admin-invite-label" htmlFor="invite-admin-email">
               Email
               <input
+                id="invite-admin-email"
                 type="email"
                 className="admin-invite-input"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                value={inviteEmail}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  setInviteEmail(e.target.value);
+                }}
+                onKeyDown={stopProp}
+                onKeyUp={stopProp}
                 disabled={loading}
-                autoComplete="email"
+                autoComplete="new-password"
               />
               {fieldErrors.email ? (
                 <span className="admin-invite-error">{fieldErrors.email}</span>
@@ -177,7 +195,12 @@ export default function AdminInviteModal({
               <select
                 className="admin-invite-input"
                 value={role}
-                onChange={(e) => setRole(e.target.value)}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  setRole(e.target.value);
+                }}
+                onKeyDown={stopProp}
+                onKeyUp={stopProp}
                 disabled={loading}
               >
                 <option value="ADMIN">ADMIN</option>
@@ -197,7 +220,12 @@ export default function AdminInviteModal({
                 inputMode="numeric"
                 className="admin-invite-input"
                 value={otp}
-                onChange={(e) => setOtp(e.target.value)}
+                onChange={(e) => {
+                  e.stopPropagation();
+                  setOtp(e.target.value);
+                }}
+                onKeyDown={stopProp}
+                onKeyUp={stopProp}
                 placeholder="6-digit code"
                 disabled={loading}
                 maxLength={6}
