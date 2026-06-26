@@ -13,6 +13,27 @@ const UUID_FILE_RE =
 
 const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i;
 
+const LEGACY_INSECURE_ORIGIN_WITH_PORT = "http://43.205.116.38:8080";
+const LEGACY_INSECURE_ORIGIN = "http://43.205.116.38";
+const PRODUCTION_ASSET_ORIGIN = "https://boldandwise.duckdns.org";
+
+/**
+ * Rewrite legacy insecure backend asset origins to the configured API origin.
+ * Prevents mixed-content blocks when DTOs still embed the old AWS IP host.
+ *
+ * @param {unknown} url
+ * @returns {string}
+ */
+export function normalizeAssetUrl(url) {
+  if (!url) return "";
+
+  const target = getApiOrigin() || PRODUCTION_ASSET_ORIGIN;
+  return String(url)
+    .trim()
+    .replace(LEGACY_INSECURE_ORIGIN_WITH_PORT, target)
+    .replace(LEGACY_INSECURE_ORIGIN, target);
+}
+
 /** Backend placeholders that are known to 404/500 — skip fetch and use letter fallback. */
 export function isUnusableMediaUrl(value) {
   const raw = String(value ?? "").trim();
@@ -104,7 +125,7 @@ function isAbsoluteCanonicalProfilePhotoUrl(raw) {
  * `http://hosthttp://host/uploads/...` → `http://host/uploads/...`
  */
 export function dedupeEmbeddedOrigin(raw) {
-  let s = String(raw ?? "").trim();
+  let s = normalizeAssetUrl(raw);
   if (!s) return "";
   const m = s.match(/^(https?:\/\/[^/]+)/i);
   if (!m) return s;
