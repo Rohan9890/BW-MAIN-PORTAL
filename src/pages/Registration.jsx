@@ -6,6 +6,7 @@ import "./Registration.css";
 import { buildApiRequestUrl } from "../services/apiConfig";
 import {
   clearStoredReferralRef,
+  isReferralRegistrationError,
   resolveReferralCodeForSubmit,
   resolveReferralInviteState,
 } from "../utils/referralStorage";
@@ -175,6 +176,7 @@ export default function Registration() {
   const [submitError, setSubmitError] = useState("");
   const [touched, setTouched] = useState({});
   const [referralLocked, setReferralLocked] = useState(false);
+  const [referralFieldError, setReferralFieldError] = useState("");
 
   const config = REG_TYPES[type] ?? REG_TYPES.individual;
 
@@ -265,6 +267,7 @@ export default function Registration() {
   const handleSave = async () => {
     setSubmitError("");
     setSubmitSuccess("");
+    setReferralFieldError("");
 
     setTouched((prev) => {
       const all = {};
@@ -332,7 +335,9 @@ export default function Registration() {
       payload.append("password", formData.password);
       payload.append("address", formData.address);
 
-      const referralCode = resolveReferralCodeForSubmit(formData.referral);
+      const referralCode = resolveReferralCodeForSubmit(formData.referral, {
+        locked: referralLocked,
+      });
       if (referralCode) {
         payload.append("referralCode", referralCode);
       }
@@ -401,6 +406,10 @@ export default function Registration() {
       if (import.meta.env.DEV) {
         // eslint-disable-next-line no-console
         console.error("FINAL ERROR:", msg);
+      }
+      if (isReferralRegistrationError(msg)) {
+        setReferralFieldError(msg);
+        setTouched((prev) => ({ ...prev, referral: true }));
       }
       showError(msg);
       setSubmitError(msg);
@@ -482,13 +491,17 @@ export default function Registration() {
                         placeholder={
                           meta?.placeholder || getFieldLabel(fieldName)
                         }
-                        error={hasError ? error : ""}
-                        onChange={(e) =>
+                        error={
+                          referralFieldError ||
+                          (hasError ? error : "")
+                        }
+                        onChange={(e) => {
+                          setReferralFieldError("");
                           setFormData((prev) => ({
                             ...prev,
                             [fieldName]: e.target.value,
-                          }))
-                        }
+                          }));
+                        }}
                         onBlur={() =>
                           setTouched((prev) => ({
                             ...prev,

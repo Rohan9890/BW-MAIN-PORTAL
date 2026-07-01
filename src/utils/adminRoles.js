@@ -147,6 +147,41 @@ export function getRoleDropdownDisabledReason(
   return "";
 }
 
+export function canActorDeactivateUser(actorRole, targetRow, allRows, actorProfile) {
+  const actor = normalizePanelRole(actorRole);
+  if (!ADMIN_PANEL_ROLES.has(actor)) return false;
+  if (isSameUserRow(actorProfile, targetRow)) return false;
+  if (actor === "ROLE_ADMIN" && extractRowPanelRole(targetRow) === "OWNER") {
+    return false;
+  }
+  if (isLastOwnerTarget(targetRow, allRows)) return false;
+  return true;
+}
+
+export function getDeactivateDisabledReason(
+  actorRole,
+  targetRow,
+  allRows,
+  actorProfile,
+) {
+  if (isSameUserRow(actorProfile, targetRow)) {
+    return "You cannot deactivate your own account";
+  }
+  if (
+    normalizePanelRole(actorRole) === "ROLE_ADMIN" &&
+    extractRowPanelRole(targetRow) === "OWNER"
+  ) {
+    return "Only owners can deactivate owner accounts";
+  }
+  if (isLastOwnerTarget(targetRow, allRows)) {
+    return "The last owner cannot be deactivated";
+  }
+  if (!canActorDeactivateUser(actorRole, targetRow, allRows, actorProfile)) {
+    return "Deactivation not permitted";
+  }
+  return "";
+}
+
 export function getRoleChangeConfirmation(fromRole, toRole, displayName) {
   const name = String(displayName || "this user").trim() || "this user";
   const from = toApiRole(fromRole);

@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  canActorDeactivateUser,
   canActorManageUserRole,
   extractRowPanelRole,
   getAllowedTargetRoles,
+  getDeactivateDisabledReason,
   getRoleChangeConfirmation,
   isLastOwnerTarget,
   isRoleChangeAllowed,
@@ -111,5 +113,38 @@ describe("adminRoles role management", () => {
     expect(getRoleChangeConfirmation("USER", "OWNER", "Jane")).toContain(
       "full platform ownership",
     );
+  });
+
+  it("canActorDeactivateUser blocks self, owner-for-admin, and last owner", () => {
+    const actor = { email: "admin@test.com", userId: "2" };
+    const otherAdminActor = { email: "admin2@test.com", userId: "22" };
+    expect(
+      canActorDeactivateUser("ROLE_ADMIN", userRow, allRows, actor),
+    ).toBe(true);
+    expect(
+      canActorDeactivateUser("ROLE_ADMIN", ownerRow, allRows, actor),
+    ).toBe(false);
+    expect(
+      canActorDeactivateUser("ROLE_ADMIN", actor, allRows, actor),
+    ).toBe(false);
+    expect(
+      canActorDeactivateUser("ROLE_OWNER", ownerRow, [ownerRow], actor),
+    ).toBe(false);
+    expect(
+      canActorDeactivateUser("ROLE_OWNER", adminRow, allRows, otherAdminActor),
+    ).toBe(true);
+  });
+
+  it("getDeactivateDisabledReason explains blocked deactivation", () => {
+    const actor = { email: "admin@test.com", userId: "2" };
+    expect(getDeactivateDisabledReason("ROLE_ADMIN", actor, allRows, actor)).toBe(
+      "You cannot deactivate your own account",
+    );
+    expect(
+      getDeactivateDisabledReason("ROLE_ADMIN", ownerRow, allRows, actor),
+    ).toBe("Only owners can deactivate owner accounts");
+    expect(
+      getDeactivateDisabledReason("ROLE_OWNER", ownerRow, [ownerRow], actor),
+    ).toBe("The last owner cannot be deactivated");
   });
 });

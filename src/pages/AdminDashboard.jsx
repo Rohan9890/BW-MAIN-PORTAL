@@ -30,7 +30,7 @@ import AdminAnnouncements from "../components/AdminAnnouncements";
 import AdminInviteModal from "../components/AdminInviteModal";
 import AdminRoleChangeModal from "../components/AdminRoleChangeModal";
 import AdminUserRoleBadge from "../components/AdminUserRoleBadge";
-import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, normalizePanelRole } from "../utils/adminRoles";
+import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, getDeactivateDisabledReason, normalizePanelRole } from "../utils/adminRoles";
 import { buildCsvContent } from "../utils/csvExport";
 import {
   DIRECT_SIGNUP_LABEL,
@@ -2025,6 +2025,23 @@ export default function AdminDashboard() {
 
   const performUserStatusUpdate = async (userId, nextActive) => {
     if (userStatusUpdatingId) return;
+    const found = userManagementRows.find((item) => item.id === userId);
+    if (!found) return;
+
+    if (!nextActive) {
+      const blockReason = getDeactivateDisabledReason(
+        role,
+        found,
+        normalizedAdminUsersList,
+        authProfile,
+      );
+      if (blockReason) {
+        showError(blockReason);
+        setUserStatusConfirmFor(null);
+        return;
+      }
+    }
+
     setUserStatusUpdatingId(userId);
     try {
       await withRetry(
@@ -2033,6 +2050,34 @@ export default function AdminDashboard() {
         },
         { maxAttempts: ACTION_MAX_ATTEMPTS, label: "update user status" },
       );
+
+      const nextStatusMeta = nextActive
+        ? { key: "ACTIVE", label: "Active", pillClass: "active" }
+        : { key: "INACTIVE", label: "Inactive", pillClass: "inactive" };
+
+      setApiAdminUsers((prev) =>
+        (Array.isArray(prev) ? prev : []).map((raw) => {
+          const rid = String(raw?.id ?? raw?.userId ?? "").trim();
+          if (rid !== String(userId)) return raw;
+          return {
+            ...raw,
+            isActive: nextActive,
+            enabled: nextActive,
+            status: nextActive ? "ACTIVE" : "INACTIVE",
+          };
+        }),
+      );
+      setEditingUser((prev) =>
+        prev?.id === userId
+          ? {
+              ...prev,
+              isActive: nextActive,
+              statusMeta: nextStatusMeta,
+              status: nextStatusMeta.label,
+            }
+          : prev,
+      );
+
       setAdminUsersReloadSeq((s) => s + 1);
       showSuccess(nextActive ? "User activated" : "User deactivated");
     } catch (e) {
@@ -2049,6 +2094,16 @@ export default function AdminDashboard() {
     if (!found) return;
     const isActive = found.statusMeta?.key === "ACTIVE";
     if (isActive) {
+      const blockReason = getDeactivateDisabledReason(
+        role,
+        found,
+        normalizedAdminUsersList,
+        authProfile,
+      );
+      if (blockReason) {
+        showError(blockReason);
+        return;
+      }
       setUserStatusConfirmFor(found);
       return;
     }
@@ -3037,6 +3092,15 @@ export default function AdminDashboard() {
                   {paginatedUserRows.map((user) => {
                     const userPhoto = extractProfilePhotoFromPayload(user);
                     const userPhotoUrl = userPhoto ? resolveProfilePhotoUrl(userPhoto) : "";
+                    const deactivateBlockedReason =
+                      user.statusMeta?.key === "ACTIVE"
+                        ? getDeactivateDisabledReason(
+                            role,
+                            user,
+                            normalizedAdminUsersList,
+                            authProfile,
+                          )
+                        : "";
                     return (
                       <tr key={user.id}>
                         <td className="users-col-user">
@@ -3145,12 +3209,14 @@ export default function AdminDashboard() {
                           onClick={() => handleUserStatusToggle(user.id)}
                           disabled={
                             !ADMIN_USER_STATUS_UPDATE_AVAILABLE ||
-                            userStatusUpdatingId === user.id
+                            userStatusUpdatingId === user.id ||
+                            Boolean(deactivateBlockedReason)
                           }
                           title={
-                            !ADMIN_USER_STATUS_UPDATE_AVAILABLE
+                            deactivateBlockedReason ||
+                            (!ADMIN_USER_STATUS_UPDATE_AVAILABLE
                               ? "Backend action not integrated yet"
-                              : undefined
+                              : undefined)
                           }
                         >
                           {user.statusMeta?.key === "ACTIVE"

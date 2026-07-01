@@ -3,8 +3,10 @@ import {
   REFERRAL_LOCKED_STORAGE_KEY,
   REFERRAL_REF_STORAGE_KEY,
   clearStoredReferralRef,
+  isReferralRegistrationError,
   parseReferralFromSearch,
   readReferralLocked,
+  resolveReferralCodeForSubmit,
   resolveReferralInviteState,
 } from "./referralStorage";
 
@@ -51,5 +53,31 @@ describe("referralStorage invite locking", () => {
     clearStoredReferralRef();
     expect(readReferralLocked()).toBe(false);
     expect(sessionStorage.getItem(REFERRAL_REF_STORAGE_KEY)).toBeNull();
+  });
+
+  it("resolveReferralInviteState does not auto-fill unlocked stale storage", () => {
+    sessionStorage.setItem(REFERRAL_REF_STORAGE_KEY, "STALE");
+    const state = resolveReferralInviteState("");
+    expect(state.ref).toBe("");
+    expect(state.locked).toBe(false);
+  });
+
+  it("resolveReferralCodeForSubmit omits referral on normal signup", () => {
+    sessionStorage.setItem(REFERRAL_REF_STORAGE_KEY, "STALE");
+    expect(resolveReferralCodeForSubmit("", { locked: false })).toBe("");
+    expect(resolveReferralCodeForSubmit("  ", { locked: false })).toBe("");
+  });
+
+  it("resolveReferralCodeForSubmit uses stored ref only when locked", () => {
+    resolveReferralInviteState("?ref=INVITE1");
+    expect(resolveReferralCodeForSubmit("", { locked: true })).toBe("INVITE1");
+    expect(resolveReferralCodeForSubmit("CUSTOM", { locked: true })).toBe(
+      "CUSTOM",
+    );
+  });
+
+  it("isReferralRegistrationError detects backend referral failures", () => {
+    expect(isReferralRegistrationError("Invalid referral code")).toBe(true);
+    expect(isReferralRegistrationError("Email already exists")).toBe(false);
   });
 });

@@ -6,6 +6,7 @@ import "./Registration.css";
 import { buildApiRequestUrl } from "../services/apiConfig";
 import {
   clearStoredReferralRef,
+  isReferralRegistrationError,
   resolveReferralCodeForSubmit,
   resolveReferralInviteState,
 } from "../utils/referralStorage";
@@ -102,6 +103,7 @@ export default function OrganizationRegistration() {
   const location = useLocation();
   const [formData, setFormData] = useState({});
   const [referralLocked, setReferralLocked] = useState(false);
+  const [referralFieldError, setReferralFieldError] = useState("");
   const [documentType, setDocumentType] = useState("");
   const [documentNumber, setDocumentNumber] = useState("");
   const [selectedFile, setSelectedFile] = useState(null);
@@ -218,6 +220,7 @@ export default function OrganizationRegistration() {
   const handleSave = async () => {
     setSubmitError("");
     setSubmitSuccess("");
+    setReferralFieldError("");
     setTouched((prev) => {
       const next = { ...prev };
       requiredFields.forEach((f) => {
@@ -276,7 +279,9 @@ export default function OrganizationRegistration() {
       payload.append("phoneNumber", String(formData.phone || ""));
       payload.append("password", String(formData.password || ""));
 
-      const referralCode = resolveReferralCodeForSubmit(formData.referral);
+      const referralCode = resolveReferralCodeForSubmit(formData.referral, {
+        locked: referralLocked,
+      });
       if (referralCode) {
         payload.append("referralCode", referralCode);
       }
@@ -299,9 +304,13 @@ export default function OrganizationRegistration() {
       setSelectedFile(null);
       setTimeout(() => navigate("/login"), 850);
     } catch (e) {
-      setSubmitError(
-        e?.message || "Unable to submit registration. Please try again.",
-      );
+      const msg =
+        e?.message || "Unable to submit registration. Please try again.";
+      if (isReferralRegistrationError(msg)) {
+        setReferralFieldError(msg);
+        setTouched((prev) => ({ ...prev, referral: true }));
+      }
+      setSubmitError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -363,13 +372,14 @@ export default function OrganizationRegistration() {
                       value={value}
                       locked={referralLocked}
                       placeholder={getPlaceholder(fieldName)}
-                      error={showError ? error : ""}
-                      onChange={(e) =>
+                      error={referralFieldError || (showError ? error : "")}
+                      onChange={(e) => {
+                        setReferralFieldError("");
                         setFormData((prev) => ({
                           ...prev,
                           [fieldName]: e.target.value,
-                        }))
-                      }
+                        }));
+                      }}
                       onBlur={() =>
                         setTouched((prev) => ({ ...prev, [fieldName]: true }))
                       }

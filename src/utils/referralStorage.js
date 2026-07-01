@@ -71,16 +71,35 @@ export function resolveReferralInviteState(search) {
   if (fromUrl) {
     persistReferralRef(fromUrl, { locked: true });
   }
-  const ref = fromUrl || readStoredReferralRef();
-  const locked = Boolean(fromUrl) || (Boolean(ref) && readReferralLocked());
+  const locked = Boolean(fromUrl) || readReferralLocked();
+  const ref = fromUrl || (locked ? readStoredReferralRef() : "");
   return { ref, locked };
 }
 
-/** Referral value for submit — prefers form field, falls back to stored ref. */
-export function resolveReferralCodeForSubmit(formReferral) {
+/**
+ * Referral value for submit — optional for normal signup.
+ * Only falls back to stored ref when the invite link locked the field.
+ */
+export function resolveReferralCodeForSubmit(formReferral, options = {}) {
+  const locked = Boolean(options.locked);
   const fromForm = String(formReferral || "").trim();
   if (fromForm) return fromForm;
-  return readStoredReferralRef();
+  if (locked) return readStoredReferralRef();
+  return "";
+}
+
+/** Map backend registration errors to the referral field when applicable. */
+export function isReferralRegistrationError(message) {
+  const m = String(message || "").toLowerCase();
+  if (!m.includes("referral")) return false;
+  return (
+    m.includes("invalid") ||
+    m.includes("not found") ||
+    m.includes("unknown") ||
+    m.includes("expired") ||
+    m.includes("does not exist") ||
+    m.includes("required")
+  );
 }
 
 /** Build shareable registration URL from the user's referral code. */

@@ -153,6 +153,11 @@ async function withRetryOnce(fn, meta) {
   }
 }
 
+/** Map UI toggle to backend PATCH `/admin/users/:id/status` body. */
+export function toAdminUserStatusValue(active) {
+  return active ? "ACTIVE" : "INACTIVE";
+}
+
 export const adminDashboardApi = {
   async getSummary() {
     try {
@@ -300,13 +305,13 @@ export const adminDashboardApi = {
     }
   },
 
-  /** PATCH /admin/users/:id/status — body: { active: boolean } */
+  /** PATCH /admin/users/:id/status — body: { status: "ACTIVE" | "INACTIVE" } */
   async updateUserStatus(id, active) {
     return backendJson(
       `/admin/users/${encodeURIComponent(String(id))}/status`,
       {
         method: "PATCH",
-        json: { active: Boolean(active) },
+        json: { status: toAdminUserStatusValue(active) },
         suppressGlobalServerErrorToast: true,
       },
     );
