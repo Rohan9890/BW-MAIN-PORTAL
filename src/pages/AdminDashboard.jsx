@@ -30,7 +30,7 @@ import AdminAnnouncements from "../components/AdminAnnouncements";
 import AdminInviteModal from "../components/AdminInviteModal";
 import AdminRoleChangeModal from "../components/AdminRoleChangeModal";
 import AdminUserRoleBadge from "../components/AdminUserRoleBadge";
-import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, getDeactivateDisabledReason, normalizePanelRole, resolveAdminUserTypeLabel } from "../utils/adminRoles";
+import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, getDeactivateDisabledReason, ADMIN_UNKNOWN_USER_LABEL, computeAdminUserRoleCounts, extractRawRoleLabel, extractRoleFromRawUser, logDevAdminUsersRoleAudit, normalizePanelRole, resolveAdminUserDisplayName, resolveAdminUserEmail, resolveAdminUserPhone, resolveAdminUserTypeLabel } from "../utils/adminRoles";
 import { buildCsvContent } from "../utils/csvExport";
 import {
   DIRECT_SIGNUP_LABEL,
@@ -329,25 +329,11 @@ function normalizeActivityEntry(entry) {
 
 /** Admin user status PATCH wired via adminDashboardApi. */
 const ADMIN_USER_STATUS_UPDATE_AVAILABLE = true;
-/** Admin user view modal (read-only details + contact history). */
 
-const UNNAMED_USER_LABEL = "Unnamed User";
-
-/** Phone fields aligned with `normalizeProfilePayload` in AuthContext. */
+/** Phone fields aligned with centralized adminRoles extractors. */
 function pickPhoneFromUserRecord(user) {
-  if (!user || typeof user !== "object") return "";
-  const nested = user.user && typeof user.user === "object" ? user.user : null;
-  const profile =
-    user.profile && typeof user.profile === "object" ? user.profile : null;
-  const raw =
-    user.phoneNumber ??
-    user.phone ??
-    user.mobile ??
-    user.mobileNumber ??
-    nested?.phoneNumber ??
-    profile?.phoneNumber ??
-    "";
-  return String(raw || "").trim();
+  const phone = resolveAdminUserPhone(user);
+  return phone === "—" ? "" : phone;
 }
 
 function pickOptionalTicketCount(user) {
@@ -385,42 +371,12 @@ function pickKycPill(user) {
 }
 
 function resolveUserDisplayName(user) {
-  if (!user || typeof user !== "object") return UNNAMED_USER_LABEL;
-  const profile =
-    user.profile && typeof user.profile === "object" ? user.profile : null;
-  const nested = user.user && typeof user.user === "object" ? user.user : null;
-  const partA = user.firstName != null ? String(user.firstName).trim() : "";
-  const partB = user.lastName != null ? String(user.lastName).trim() : "";
-  const fromParts = [partA, partB].filter(Boolean).join(" ").trim();
-  const candidates = [
-    user.name,
-    user.fullName,
-    user.username,
-    user.displayName,
-    fromParts,
-    profile?.name,
-    nested?.name,
-  ];
-  for (const c of candidates) {
-    const t = String(c ?? "")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (
-      !t ||
-      t === "undefined" ||
-      t === "null" ||
-      /^undefined(\s+undefined)?$/i.test(t)
-    ) {
-      continue;
-    }
-    return t;
-  }
-  return UNNAMED_USER_LABEL;
+  return resolveAdminUserDisplayName(user);
 }
 
 function avatarInitialsFromDisplayName(displayName) {
   const d = String(displayName || "").trim();
-  if (!d || d === UNNAMED_USER_LABEL) return "U";
+  if (!d || d === ADMIN_UNKNOWN_USER_LABEL) return "U";
   return getInitials(d);
 }
 
@@ -471,7 +427,7 @@ function pickTicketsNavQueryParts(rawUser) {
   const id = String(rawUser.id ?? rawUser.userId ?? "").trim();
   const email = String(rawUser.email ?? rawUser.userEmail ?? "").trim();
   const resolved = resolveUserDisplayName(rawUser).trim();
-  const name = resolved && resolved !== UNNAMED_USER_LABEL ? resolved : "";
+  const name = resolved && resolved !== ADMIN_UNKNOWN_USER_LABEL ? resolved : "";
   const q = id || email || name || "";
   const enabled = Boolean(id || email || name);
   return { q, enabled };
@@ -522,48 +478,20 @@ function normalizeAdminUserRow(user) {
   const externalUserId = extractAdminUserExternalId(user);
   const listId = toStringSafe(user?.id ?? user?.userId, "").trim();
   const id = listId || externalUserId || "";
-  
-  const partA = user?.firstName != null ? String(user.firstName).trim() : "";
-  const partB = user?.lastName != null ? String(user.lastName).trim() : "";
-  const fromParts = [partA, partB].filter(Boolean).join(" ").trim();
-  const fullNameRaw =
-    String(user?.fullName || "").trim() ||
-    fromParts ||
-    String(user?.name || "").trim() ||
-    String(user?.displayName || "").trim() ||
-    String(user?.user?.name || "").trim() ||
-    String(user?.profile?.name || "").trim() ||
-    "Unknown User";
-  const fullName = fullNameRaw || "Unknown User";
 
-  const emailRaw = toStringSafe(
-    user?.email ??
-    user?.userEmail ??
-    user?.user?.email ??
-    user?.profile?.email ??
-    user?.username ??
-    "",
-    ""
-  ).trim();
-  const email = emailRaw || "—";
+  const fullName = resolveAdminUserDisplayName(user);
+  const email = resolveAdminUserEmail(user);
+  const phone = resolveAdminUserPhone(user);
+  const rawRole = extractRawRoleLabel(user);
+  const panelRole = extractRoleFromRawUser(user) || "ROLE_USER";
 
   const joinedRaw =
     user?.joinedOn ?? user?.createdAt ?? user?.registeredAt ?? "";
   const joinedOnDisplay = formatJoinedDate(joinedRaw);
-  const phoneRaw = pickPhoneFromUserRecord(user);
-  const phone = phoneRaw || "—";
   const kycPill = pickKycPill(user);
   const statusMeta = pickAccountStatusMeta(user);
   const ticketCount = pickOptionalTicketCount(user);
   const ticketsNav = pickTicketsNavQueryParts(user);
-  
-  const rawRole =
-    user?.panelRole ??
-    user?.role ??
-    user?.userRole ??
-    user?.adminRole ??
-    user?.type;
-  const panelRole = normalizePanelRole(rawRole) || "ROLE_USER";
 
   const referredByNested = user?.referredBy;
   const referredByUserId = normalizeReferredByDisplay(
@@ -577,7 +505,7 @@ function normalizeAdminUserRow(user) {
     ...user,
     id:
       id ||
-      email ||
+      (email !== "—" ? email : "") ||
       fullName ||
       crypto.randomUUID?.() ||
       `u_${Math.random()}`,
@@ -596,7 +524,9 @@ function normalizeAdminUserRow(user) {
     status: statusMeta.label,
     ticketCount,
     ticketsNav,
+    rawRole,
     panelRole,
+    accountTypeLabel: resolveAdminUserTypeLabel({ ...user, panelRole }),
     referredByUserId,
     _raw: user,
   };
@@ -1618,22 +1548,23 @@ export default function AdminDashboard() {
   );
 
   const userRoleCounts = useMemo(
-    () => ({
-      all: normalizedAdminUsersList.length,
-      admin: normalizedAdminUsersList.filter((u) => u.panelRole === "ROLE_ADMIN")
-        .length,
-      owner: normalizedAdminUsersList.filter((u) => u.panelRole === "ROLE_OWNER")
-        .length,
-    }),
+    () => computeAdminUserRoleCounts(normalizedAdminUsersList),
     [normalizedAdminUsersList],
   );
+
+  useEffect(() => {
+    if (pageKey !== "users" || apiAdminUsersLoading) return;
+    logDevAdminUsersRoleAudit(normalizedAdminUsersList, {
+      source: "AdminDashboard.users",
+    });
+  }, [pageKey, apiAdminUsersLoading, normalizedAdminUsersList]);
 
   const userManagementRows = useMemo(() => {
     const query = userSearchText.trim().toLowerCase();
     return normalizedAdminUsersList.filter((user) => {
       const matchesSearch =
         !query ||
-        `${user.id} ${user.name} ${user.email} ${user.phone} ${user.panelRole ?? ""} ${user.referredByUserId ?? ""} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
+        `${user.id} ${user.userId ?? ""} ${user.name} ${user.email} ${user.phone} ${user.panelRole ?? ""} ${user.accountTypeLabel ?? ""} ${user.referredByUserId ?? ""} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
           .toLowerCase()
           .includes(query);
       const matchesStatus =
@@ -2167,7 +2098,7 @@ export default function AdminDashboard() {
     setEditingUser(found);
     setUserEditErrors({});
     setUserEditForm({
-      name: found.displayName !== UNNAMED_USER_LABEL ? found.displayName : "",
+      name: found.displayName !== ADMIN_UNKNOWN_USER_LABEL ? found.displayName : "",
       email: found.email !== "—" ? found.email : "",
       phone: found.phone !== "—" ? found.phone : "",
     });

@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   canActorDeactivateUser,
   canActorManageUserRole,
+  computeAdminUserRoleCounts,
+  extractEmailFromRawUser,
+  extractNameFromRawUser,
+  extractPhoneFromRawUser,
+  extractRawRoleLabel,
+  extractRoleFromRawUser,
   extractRowPanelRole,
   getAllowedTargetRoles,
   getDeactivateDisabledReason,
@@ -10,8 +16,84 @@ import {
   isOrganizationAccount,
   isRoleChangeAllowed,
   isSameUserRow,
+  normalizePanelRole,
+  resolveAdminUserDisplayName,
   resolveAdminUserTypeLabel,
 } from "./adminRoles";
+
+describe("adminRoles extractors", () => {
+  it("normalizePanelRole supports all backend role shapes", () => {
+    expect(normalizePanelRole("ROLE_USER")).toBe("ROLE_USER");
+    expect(normalizePanelRole("USER")).toBe("ROLE_USER");
+    expect(normalizePanelRole("ROLE_ORG")).toBe("ROLE_ORG");
+    expect(normalizePanelRole("ORG")).toBe("ROLE_ORG");
+    expect(normalizePanelRole("ROLE_ADMIN")).toBe("ROLE_ADMIN");
+    expect(normalizePanelRole("ADMIN")).toBe("ROLE_ADMIN");
+    expect(normalizePanelRole("ROLE_OWNER")).toBe("ROLE_OWNER");
+    expect(normalizePanelRole("OWNER")).toBe("ROLE_OWNER");
+  });
+
+  it("extractRoleFromRawUser reads nested profile and authorities", () => {
+    expect(
+      extractRoleFromRawUser({
+        profile: { role: "OWNER" },
+        email: "owner@test.com",
+      }),
+    ).toBe("ROLE_OWNER");
+    expect(
+      extractRoleFromRawUser({
+        authorities: [{ authority: "ROLE_ADMIN" }],
+      }),
+    ).toBe("ROLE_ADMIN");
+    expect(
+      extractRoleFromRawUser({
+        user: { userRole: "ORG" },
+      }),
+    ).toBe("ROLE_ORG");
+  });
+
+  it("extractNameFromRawUser prefers firstName + lastName", () => {
+    expect(
+      extractNameFromRawUser({ firstName: "Jane", lastName: "Doe" }),
+    ).toBe("Jane Doe");
+    expect(
+      extractNameFromRawUser({ profile: { displayName: "Acme Org" } }),
+    ).toBe("Acme Org");
+  });
+
+  it("extractEmailFromRawUser reads nested emailAddress", () => {
+    expect(
+      extractEmailFromRawUser({ user: { emailAddress: "a@test.com" } }),
+    ).toBe("a@test.com");
+  });
+
+  it("extractPhoneFromRawUser reads nested phoneNumber", () => {
+    expect(
+      extractPhoneFromRawUser({ profile: { phoneNumber: "9876543210" } }),
+    ).toBe("9876543210");
+  });
+
+  it("resolveAdminUserDisplayName falls back to Unknown User", () => {
+    expect(resolveAdminUserDisplayName({})).toBe("Unknown User");
+  });
+
+  it("computeAdminUserRoleCounts uses normalized panelRole", () => {
+    const rows = [
+      { panelRole: "ROLE_ADMIN" },
+      { panelRole: "ROLE_OWNER" },
+      { panelRole: "ROLE_USER" },
+    ];
+    expect(computeAdminUserRoleCounts(rows)).toEqual({
+      all: 3,
+      admin: 1,
+      owner: 1,
+    });
+  });
+
+  it("extractRawRoleLabel preserves raw backend value for audit", () => {
+    expect(extractRawRoleLabel({ role: "ROLE_ADMIN" })).toBe("ROLE_ADMIN");
+  });
+});
 
 describe("adminRoles role management", () => {
   const ownerRow = { id: "1", email: "owner@test.com", role: "OWNER" };
@@ -166,6 +248,7 @@ describe("adminRoles role management", () => {
   it("isOrganizationAccount supports legacy USR- rows with org metadata", () => {
     expect(isOrganizationAccount({ userId: "ORG-1" })).toBe(true);
     expect(isOrganizationAccount({ userId: "USR-1", orgName: "Legacy Org" })).toBe(true);
+    expect(isOrganizationAccount({ userId: "USR-1", entityType: "Organization" })).toBe(true);
     expect(isOrganizationAccount({ userId: "USR-1" })).toBe(false);
   });
 });
