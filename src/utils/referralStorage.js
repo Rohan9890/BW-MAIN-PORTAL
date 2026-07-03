@@ -2,6 +2,9 @@
 export const REFERRAL_REF_STORAGE_KEY = "bw-referral-ref";
 export const REFERRAL_LOCKED_STORAGE_KEY = "bw-referral-ref-locked";
 
+/** Default platform referral for direct signup (always locked, not user-editable). */
+export const DEFAULT_DIRECT_SIGNUP_REFERRAL = "BWVPL#26";
+
 export function parseReferralFromSearch(search) {
   const raw =
     typeof search === "string"
@@ -63,29 +66,32 @@ export function clearStoredReferralRef() {
 }
 
 /**
- * Resolve referral state from URL + storage for registration forms.
- * Locks when ?ref= is present or a prior invite-link session was persisted.
+ * Resolve referral state for registration forms.
+ * - Direct signup → default `BWVPL#26`, always locked
+ * - `/register?ref=CODE` → invite code overrides default, locked
+ * Clears stale storage on direct signup to prevent pollution.
  */
 export function resolveReferralInviteState(search) {
   const fromUrl = parseReferralFromSearch(search);
   if (fromUrl) {
     persistReferralRef(fromUrl, { locked: true });
+    return { ref: fromUrl, locked: true, fromInviteLink: true };
   }
-  const locked = Boolean(fromUrl) || readReferralLocked();
-  const ref = fromUrl || (locked ? readStoredReferralRef() : "");
-  return { ref, locked };
+
+  clearStoredReferralRef();
+  return {
+    ref: DEFAULT_DIRECT_SIGNUP_REFERRAL,
+    locked: true,
+    fromInviteLink: false,
+  };
 }
 
-/**
- * Referral value for submit — optional for normal signup.
- * Only falls back to stored ref when the invite link locked the field.
- */
+/** Referral value for submit — form field or resolved invite/default code. */
 export function resolveReferralCodeForSubmit(formReferral, options = {}) {
-  const locked = Boolean(options.locked);
   const fromForm = String(formReferral || "").trim();
   if (fromForm) return fromForm;
-  if (locked) return readStoredReferralRef();
-  return "";
+  if (options.ref) return String(options.ref).trim();
+  return DEFAULT_DIRECT_SIGNUP_REFERRAL;
 }
 
 /** Map backend registration errors to the referral field when applicable. */

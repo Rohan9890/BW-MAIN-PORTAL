@@ -102,7 +102,8 @@ export default function IndividualRegistration() {
   const navigate = useNavigate();
   const location = useLocation();
   const [formData, setFormData] = useState({});
-  const [referralLocked, setReferralLocked] = useState(false);
+  const [referralLocked, setReferralLocked] = useState(true);
+  const [referralFromInvite, setReferralFromInvite] = useState(false);
   const [referralFieldError, setReferralFieldError] = useState("");
   const [documentType, setDocumentType] = useState("");
   const [documentNumber, setDocumentNumber] = useState("");
@@ -135,14 +136,10 @@ export default function IndividualRegistration() {
   );
 
   useEffect(() => {
-    const { ref, locked } = resolveReferralInviteState(location.search);
+    const { ref, locked, fromInviteLink } = resolveReferralInviteState(location.search);
     setReferralLocked(locked);
-    if (!ref) return;
-    setFormData((prev) =>
-      prev.referral && String(prev.referral).trim()
-        ? prev
-        : { ...prev, referral: ref },
-    );
+    setReferralFromInvite(fromInviteLink);
+    setFormData((prev) => ({ ...prev, referral: ref }));
   }, [location.search]);
 
   useEffect(() => {
@@ -266,9 +263,7 @@ export default function IndividualRegistration() {
       payload.append("phoneNumber", String(formData.phone || ""));
       payload.append("password", String(formData.password || ""));
 
-      const referralCode = resolveReferralCodeForSubmit(formData.referral, {
-        locked: referralLocked,
-      });
+      const referralCode = resolveReferralCodeForSubmit(formData.referral);
       if (referralCode) {
         payload.append("referralCode", referralCode);
       }
@@ -358,15 +353,9 @@ export default function IndividualRegistration() {
                       id="individual-referral"
                       value={value}
                       locked={referralLocked}
+                      fromInviteLink={referralFromInvite}
                       placeholder={getPlaceholder(fieldName)}
                       error={referralFieldError || (showError ? error : "")}
-                      onChange={(e) => {
-                        setReferralFieldError("");
-                        setFormData((prev) => ({
-                          ...prev,
-                          [fieldName]: e.target.value,
-                        }));
-                      }}
                       onBlur={() =>
                         setTouched((prev) => ({ ...prev, [fieldName]: true }))
                       }

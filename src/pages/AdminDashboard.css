@@ -1383,6 +1383,12 @@ html[data-theme="dark"] .skeleton {
   border-color: #e2e8f0;
 }
 
+.users-role-badge--org {
+  background: #ecfdf5;
+  color: #047857;
+  border-color: rgba(5, 150, 105, 0.25);
+}
+
 .users-role-badge--admin {
   background: #eff6ff;
   color: #1d4ed8;
@@ -2922,6 +2928,12 @@ html[data-theme="dark"] .users-role-badge--user {
   background: #1e293b;
   color: #94a3b8;
   border-color: #334155;
+}
+
+html[data-theme="dark"] .users-role-badge--org {
+  background: rgba(6, 78, 59, 0.45);
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.35);
 }
 
 html[data-theme="dark"] .users-role-badge--admin {

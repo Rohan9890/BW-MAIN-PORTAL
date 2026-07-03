@@ -9,6 +9,7 @@ export function normalizePanelRole(value) {
   if (!s) return "";
   if (s.includes("ROLE_OWNER") || s === "OWNER") return "ROLE_OWNER";
   if (s.includes("ROLE_ADMIN") || s === "ADMIN") return "ROLE_ADMIN";
+  if (s.includes("ROLE_ORG") || s === "ORG") return "ROLE_ORG";
   if (s.includes("ROLE_USER") || s === "USER") return "ROLE_USER";
   if (s.startsWith("ROLE_")) return s;
   return "";
@@ -26,13 +27,64 @@ export function canInviteOwnerRole(inviterRole) {
   return normalizePanelRole(inviterRole) === "ROLE_OWNER";
 }
 
-/** Short API/UI role labels (no ROLE_ prefix). */
+/** Short API/UI role labels for admin role changes (account type ORG is display-only). */
 export const PANEL_ROLE_OPTIONS = ["USER", "ADMIN", "OWNER"];
 
 export function toApiRole(value) {
   const normalized = normalizePanelRole(value);
   if (!normalized) return "USER";
   return normalized.replace(/^ROLE_/, "");
+}
+
+/** True when row represents an organization account (supports legacy USR- org rows). */
+export function isOrganizationAccount(user) {
+  if (!user || typeof user !== "object") return false;
+
+  const panel = normalizePanelRole(
+    user.panelRole ?? user.role ?? user.userRole ?? user.adminRole ?? user.type,
+  );
+  if (panel === "ROLE_ORG") return true;
+
+  const idCandidates = [
+    user.userId,
+    user.id,
+    user.publicUserId,
+    user.externalUserId,
+    user.externalId,
+    user._raw?.userId,
+    user._raw?.id,
+  ]
+    .map((v) => String(v ?? "").trim())
+    .filter(Boolean);
+  if (idCandidates.some((id) => /^ORG-/i.test(id))) return true;
+
+  const entity = String(
+    user.entityType ?? user.userType ?? user.accountType ?? user._raw?.entityType ?? "",
+  )
+    .trim()
+    .toUpperCase();
+  if (entity === "ORG" || entity === "ORGANIZATION" || entity === "ORGANISATION") {
+    return true;
+  }
+
+  const orgName = String(
+    user.orgName ?? user.organizationName ?? user.companyName ?? user._raw?.orgName ?? "",
+  ).trim();
+  return Boolean(orgName);
+}
+
+/**
+ * Admin users table badge label: USER (individual), ORG (organization), ADMIN, OWNER.
+ */
+export function resolveAdminUserTypeLabel(user) {
+  if (!user || typeof user !== "object") return "USER";
+  const panel = normalizePanelRole(
+    user.panelRole ?? user.role ?? user.userRole ?? user.adminRole ?? user.type,
+  );
+  if (panel === "ROLE_ADMIN") return "ADMIN";
+  if (panel === "ROLE_OWNER") return "OWNER";
+  if (isOrganizationAccount(user)) return "ORG";
+  return "USER";
 }
 
 export function extractRowPanelRole(user) {

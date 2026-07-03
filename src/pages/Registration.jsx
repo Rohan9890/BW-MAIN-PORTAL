@@ -175,21 +175,18 @@ export default function Registration() {
   const [submitSuccess, setSubmitSuccess] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [touched, setTouched] = useState({});
-  const [referralLocked, setReferralLocked] = useState(false);
+  const [referralLocked, setReferralLocked] = useState(true);
+  const [referralFromInvite, setReferralFromInvite] = useState(false);
   const [referralFieldError, setReferralFieldError] = useState("");
 
   const config = REG_TYPES[type] ?? REG_TYPES.individual;
 
-  // Auto-fill referral from ?ref= and persist for refresh / login → register return.
+  // Auto-fill locked referral: default platform code or ?ref= invite override.
   useEffect(() => {
-    const { ref, locked } = resolveReferralInviteState(location.search);
+    const { ref, locked, fromInviteLink } = resolveReferralInviteState(location.search);
     setReferralLocked(locked);
-    if (!ref) return;
-    setFormData((prev) =>
-      prev.referral && String(prev.referral).trim()
-        ? prev
-        : { ...prev, referral: ref },
-    );
+    setReferralFromInvite(fromInviteLink);
+    setFormData((prev) => ({ ...prev, referral: ref }));
   }, [location.search]);
 
   useEffect(() => {
@@ -225,9 +222,10 @@ export default function Registration() {
     const normalized =
       nextType === "organization" ? "organization" : "individual";
     setType(normalized);
-    const { ref: storedRef, locked } = resolveReferralInviteState(location.search);
+    const { ref, locked, fromInviteLink } = resolveReferralInviteState(location.search);
     setReferralLocked(locked);
-    setFormData(storedRef ? { referral: storedRef } : {});
+    setReferralFromInvite(fromInviteLink);
+    setFormData({ referral: ref });
     setDocumentType("");
     setDocumentNumber("");
     setSelectedFile(null);
@@ -335,9 +333,7 @@ export default function Registration() {
       payload.append("password", formData.password);
       payload.append("address", formData.address);
 
-      const referralCode = resolveReferralCodeForSubmit(formData.referral, {
-        locked: referralLocked,
-      });
+      const referralCode = resolveReferralCodeForSubmit(formData.referral);
       if (referralCode) {
         payload.append("referralCode", referralCode);
       }
@@ -488,6 +484,7 @@ export default function Registration() {
                         id="registration-referral"
                         value={value}
                         locked={referralLocked}
+                        fromInviteLink={referralFromInvite}
                         placeholder={
                           meta?.placeholder || getFieldLabel(fieldName)
                         }
@@ -495,13 +492,6 @@ export default function Registration() {
                           referralFieldError ||
                           (hasError ? error : "")
                         }
-                        onChange={(e) => {
-                          setReferralFieldError("");
-                          setFormData((prev) => ({
-                            ...prev,
-                            [fieldName]: e.target.value,
-                          }));
-                        }}
                         onBlur={() =>
                           setTouched((prev) => ({
                             ...prev,

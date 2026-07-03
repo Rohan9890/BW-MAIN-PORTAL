@@ -28,6 +28,26 @@ describe("toAdminUserStatusMeta", () => {
   });
 });
 
+describe("adminDashboardApi.updateUser", () => {
+  beforeEach(() => {
+    backendJson.mockReset();
+    backendJson.mockResolvedValue({ ok: true });
+  });
+
+  it("PATCHes email and phoneNumber", async () => {
+    await adminDashboardApi.updateUser("USR-42", {
+      email: "new@test.com",
+      phoneNumber: "9876543210",
+    });
+
+    expect(backendJson).toHaveBeenCalledWith("/admin/users/USR-42", {
+      method: "PATCH",
+      json: { email: "new@test.com", phoneNumber: "9876543210" },
+      suppressGlobalServerErrorToast: true,
+    });
+  });
+});
+
 describe("adminDashboardApi.updateUserStatus", () => {
   beforeEach(() => {
     backendJson.mockReset();

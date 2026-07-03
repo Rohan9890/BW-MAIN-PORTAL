@@ -1,30 +1,13 @@
 import { useEffect, useState } from "react";
 import { adminDashboardApi } from "../services/adminDashboardApi";
+import {
+  extractAdminUserExternalId,
+  isExternalUserId,
+} from "../utils/userExternalId";
 
-/** Backend history rows are keyed by external ids (USR-*, ADM-*), not numeric list ids. */
-export function extractAdminUserExternalId(user) {
-  if (!user || typeof user !== "object") return "";
-  const raw = user._raw && typeof user._raw === "object" ? user._raw : user;
-  const sources = [user, raw, user.user, raw.user, user.profile, raw.profile].filter(
-    (item) => item && typeof item === "object",
-  );
-  const keys = [
-    "userId",
-    "user_id",
-    "publicUserId",
-    "externalUserId",
-    "externalId",
-  ];
-  for (const src of sources) {
-    for (const key of keys) {
-      const s = String(src[key] ?? "").trim();
-      if (s && /^(USR|ADM)-/i.test(s)) return s;
-    }
-    const idValue = String(src.id ?? "").trim();
-    if (/^(USR|ADM)-/i.test(idValue)) return idValue;
-  }
-  return "";
-}
+export { extractAdminUserExternalId } from "../utils/userExternalId";
+
+/** Backend history rows are keyed by external ids (USR-*, ADM-*, ORG-*), not numeric list ids. */
 
 export function resolveAdminContactHistoryUserId(user) {
   if (!user || typeof user !== "object") return "";
@@ -35,7 +18,7 @@ export function resolveAdminContactHistoryUserId(user) {
 }
 
 function isExternalAdminUserId(value) {
-  return /^(USR|ADM)-/i.test(String(value ?? "").trim());
+  return isExternalUserId(value);
 }
 
 async function resolveContactHistoryLookupId(user, seedId) {

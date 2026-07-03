@@ -30,7 +30,7 @@ import AdminAnnouncements from "../components/AdminAnnouncements";
 import AdminInviteModal from "../components/AdminInviteModal";
 import AdminRoleChangeModal from "../components/AdminRoleChangeModal";
 import AdminUserRoleBadge from "../components/AdminUserRoleBadge";
-import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, getDeactivateDisabledReason, normalizePanelRole } from "../utils/adminRoles";
+import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, getDeactivateDisabledReason, normalizePanelRole, resolveAdminUserTypeLabel } from "../utils/adminRoles";
 import { buildCsvContent } from "../utils/csvExport";
 import {
   DIRECT_SIGNUP_LABEL,
@@ -489,6 +489,33 @@ function formatJoinedDate(raw) {
     }
   }
   return s;
+}
+
+function validateAdminUserEditForm(form) {
+  const errors = {};
+  const email = String(form?.email || "").trim();
+  const phoneDigits = String(form?.phone || "").replace(/\D/g, "");
+  if (!email) errors.email = "Email is required.";
+  else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    errors.email = "Enter a valid email address.";
+  }
+  if (!phoneDigits) errors.phone = "Phone is required.";
+  else if (phoneDigits.length < 10 || phoneDigits.length > 15) {
+    errors.phone = "Enter a valid phone number.";
+  }
+  return {
+    errors,
+    values: { email, phoneNumber: phoneDigits },
+  };
+}
+
+function pickAdminUserPatchId(user) {
+  if (!user) return "";
+  const external = extractAdminUserExternalId(user);
+  if (external) return external;
+  const userId = String(user.userId ?? "").trim();
+  if (userId && userId !== "—") return userId;
+  return String(user.id ?? "").trim();
 }
 
 function normalizeAdminUserRow(user) {
@@ -1371,6 +1398,8 @@ export default function AdminDashboard() {
     email: "",
     phone: "",
   });
+  const [userEditErrors, setUserEditErrors] = useState({});
+  const [userEditSaving, setUserEditSaving] = useState(false);
   const [contactHistoryUser, setContactHistoryUser] = useState(null);
   const [userStatusUpdatingId, setUserStatusUpdatingId] = useState(null);
   const [userStatusConfirmFor, setUserStatusConfirmFor] = useState(null);
@@ -2132,10 +2161,11 @@ export default function AdminDashboard() {
     setRoleChangeToRole("");
   };
 
-  const handleUserView = (userId) => {
+  const handleUserEdit = (userId) => {
     const found = userManagementRows.find((item) => item.id === userId);
     if (!found) return;
     setEditingUser(found);
+    setUserEditErrors({});
     setUserEditForm({
       name: found.displayName !== UNNAMED_USER_LABEL ? found.displayName : "",
       email: found.email !== "—" ? found.email : "",
@@ -2143,9 +2173,80 @@ export default function AdminDashboard() {
     });
   };
 
+  const userEditDirty = useMemo(() => {
+    if (!editingUser) return false;
+    const origEmail = editingUser.email !== "—" ? editingUser.email : "";
+    const origPhone = editingUser.phone !== "—" ? editingUser.phone : "";
+    return (
+      userEditForm.email !== origEmail || userEditForm.phone !== origPhone
+    );
+  }, [editingUser, userEditForm]);
+
+  const handleUserEditSave = async () => {
+    if (!editingUser || userEditSaving || !userEditDirty) return;
+    const { errors, values } = validateAdminUserEditForm(userEditForm);
+    if (Object.keys(errors).length) {
+      setUserEditErrors(errors);
+      return;
+    }
+    setUserEditErrors({});
+    const patchId = pickAdminUserPatchId(editingUser);
+    if (!patchId) {
+      showError("Cannot update user — missing user id.");
+      return;
+    }
+    setUserEditSaving(true);
+    try {
+      await adminDashboardApi.updateUser(patchId, values);
+      const nextPhone = values.phoneNumber;
+      const nextEmail = values.email;
+      setApiAdminUsers((prev) =>
+        (Array.isArray(prev) ? prev : []).map((raw) => {
+          const rid = String(raw?.id ?? raw?.userId ?? "").trim();
+          const eid = extractAdminUserExternalId(raw) || rid;
+          if (
+            rid !== String(editingUser.id) &&
+            eid !== patchId &&
+            String(raw?.userId ?? "").trim() !== patchId
+          ) {
+            return raw;
+          }
+          return {
+            ...raw,
+            email: nextEmail,
+            phoneNumber: nextPhone,
+            phone: nextPhone,
+          };
+        }),
+      );
+      setEditingUser((prev) =>
+        prev
+          ? {
+              ...prev,
+              email: nextEmail,
+              phone: nextPhone,
+            }
+          : prev,
+      );
+      setUserEditForm((prev) => ({
+        ...prev,
+        email: nextEmail,
+        phone: nextPhone,
+      }));
+      setAdminUsersReloadSeq((s) => s + 1);
+      showSuccess("User updated");
+    } catch (e) {
+      showApiErrorToast("Could not update user", e);
+    } finally {
+      setUserEditSaving(false);
+    }
+  };
+
   const closeUserEditModal = () => {
     setEditingUser(null);
     setUserEditForm({ name: "", email: "", phone: "" });
+    setUserEditErrors({});
+    setUserEditSaving(false);
   };
 
   const handleNavigateUserTickets = (user) => {
@@ -2179,7 +2280,7 @@ export default function AdminDashboard() {
       user.phone,
       user.kycPill?.label ?? "—",
       user.joinedOnDisplay ?? "—",
-      user.panelRole?.replace(/^ROLE_/, "") ?? "USER",
+      resolveAdminUserTypeLabel(user),
       user.referredByUserId ?? DIRECT_SIGNUP_LABEL,
       user.statusMeta?.label ?? user.status ?? "—",
     ]);
@@ -3179,7 +3280,7 @@ export default function AdminDashboard() {
                         {user.joinedOnDisplay}
                       </td>
                       <td className="users-col-role">
-                        <AdminUserRoleBadge role={user.panelRole} compact />
+                        <AdminUserRoleBadge user={user} compact />
                       </td>
                       <td className="users-col-referred-by">
                         <span
@@ -3224,9 +3325,9 @@ export default function AdminDashboard() {
                         <button
                           type="button"
                           className="users-row-action users-row-edit"
-                          onClick={() => handleUserView(user.id)}
+                          onClick={() => handleUserEdit(user.id)}
                         >
-                          View
+                          Edit
                         </button>
                       </td>
                     </tr>
@@ -3292,44 +3393,66 @@ export default function AdminDashboard() {
               }}
             >
               <div className="kyc-mod-modal" role="dialog" aria-modal="true">
-                <h4>View user</h4>
+                <h4>Edit user</h4>
                 <p className="kyc-mod-muted">
                   {editingUser.displayName} ·{" "}
-                  <span className="kyc-mod-mono">{editingUser.id}</span>
+                  <span className="kyc-mod-mono">{editingUser.userId || editingUser.id}</span>
                 </p>
                 <div className="users-view-role-row">
                   <span className="kyc-mod-label">Role</span>
-                  <AdminUserRoleBadge role={editingUser.panelRole} />
+                  <AdminUserRoleBadge user={editingUser} />
                 </div>
-                <label className="kyc-mod-label" htmlFor="user-view-name">
+                <label className="kyc-mod-label" htmlFor="user-edit-name">
                   Name
                 </label>
                 <input
-                  id="user-view-name"
+                  id="user-edit-name"
                   className="users-control-input"
                   value={userEditForm.name}
                   readOnly
                 />
-                <label className="kyc-mod-label" htmlFor="user-view-email">
+                <label className="kyc-mod-label" htmlFor="user-edit-email">
                   Email
                 </label>
                 <input
-                  id="user-view-email"
+                  id="user-edit-email"
                   className="users-control-input"
                   type="email"
                   value={userEditForm.email}
-                  readOnly
+                  disabled={userEditSaving}
+                  onChange={(e) => {
+                    setUserEditErrors((prev) => ({ ...prev, email: "" }));
+                    setUserEditForm((prev) => ({ ...prev, email: e.target.value }));
+                  }}
                 />
-                <label className="kyc-mod-label" htmlFor="user-view-phone">
+                {userEditErrors.email ? (
+                  <div className="reg-field-error">{userEditErrors.email}</div>
+                ) : null}
+                <label className="kyc-mod-label" htmlFor="user-edit-phone">
                   Phone
                 </label>
                 <input
-                  id="user-view-phone"
+                  id="user-edit-phone"
                   className="users-control-input"
                   value={userEditForm.phone}
-                  readOnly
+                  disabled={userEditSaving}
+                  onChange={(e) => {
+                    setUserEditErrors((prev) => ({ ...prev, phone: "" }));
+                    setUserEditForm((prev) => ({ ...prev, phone: e.target.value }));
+                  }}
                 />
+                {userEditErrors.phone ? (
+                  <div className="reg-field-error">{userEditErrors.phone}</div>
+                ) : null}
                 <div className="kyc-mod-modal-actions">
+                  <button
+                    type="button"
+                    className="users-page-btn"
+                    disabled={userEditSaving || !userEditDirty}
+                    onClick={() => void handleUserEditSave()}
+                  >
+                    {userEditSaving ? "Saving…" : "Save"}
+                  </button>
                   {canActorManageUserRole(
                     role,
                     editingUser,

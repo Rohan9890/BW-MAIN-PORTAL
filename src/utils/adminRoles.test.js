@@ -7,8 +7,10 @@ import {
   getDeactivateDisabledReason,
   getRoleChangeConfirmation,
   isLastOwnerTarget,
+  isOrganizationAccount,
   isRoleChangeAllowed,
   isSameUserRow,
+  resolveAdminUserTypeLabel,
 } from "./adminRoles";
 
 describe("adminRoles role management", () => {
@@ -146,5 +148,24 @@ describe("adminRoles role management", () => {
     expect(
       getDeactivateDisabledReason("ROLE_OWNER", ownerRow, [ownerRow], actor),
     ).toBe("The last owner cannot be deactivated");
+  });
+
+  it("resolveAdminUserTypeLabel distinguishes USER and ORG accounts", () => {
+    expect(
+      resolveAdminUserTypeLabel({ role: "USER", userId: "USR-12345678" }),
+    ).toBe("USER");
+    expect(
+      resolveAdminUserTypeLabel({ role: "USER", userId: "ORG-12345678" }),
+    ).toBe("ORG");
+    expect(resolveAdminUserTypeLabel({ role: "ADMIN" })).toBe("ADMIN");
+    expect(
+      resolveAdminUserTypeLabel({ role: "USER", orgName: "Acme Corp", userId: "USR-99" }),
+    ).toBe("ORG");
+  });
+
+  it("isOrganizationAccount supports legacy USR- rows with org metadata", () => {
+    expect(isOrganizationAccount({ userId: "ORG-1" })).toBe(true);
+    expect(isOrganizationAccount({ userId: "USR-1", orgName: "Legacy Org" })).toBe(true);
+    expect(isOrganizationAccount({ userId: "USR-1" })).toBe(false);
   });
 });

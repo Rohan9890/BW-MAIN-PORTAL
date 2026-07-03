@@ -16,6 +16,7 @@ describe("referralDisplay", () => {
 
   it("preserves referrer user ids", () => {
     expect(normalizeReferredByDisplay("USR-84739037")).toBe("USR-84739037");
+    expect(normalizeReferredByDisplay("ORG-84739037")).toBe("ORG-84739037");
   });
 
   it("isDirectSignup detects canonical label only", () => {

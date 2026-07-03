@@ -1,10 +1,11 @@
 /**
- * Referral code input — readOnly when applied from invite link (?ref=).
+ * Referral code input — always read-only (direct default or invite link).
  */
 export default function ReferralCodeField({
   id = "referral-code",
   value = "",
-  locked = false,
+  locked = true,
+  fromInviteLink = false,
   placeholder = "Referral Code / Name",
   label = "Referral Code / Name",
   icon = "🎟️",
@@ -13,6 +14,7 @@ export default function ReferralCodeField({
   onBlur,
 }) {
   const hasError = Boolean(error);
+  const readOnly = locked !== false;
 
   return (
     <div className="reg-input-block">
@@ -20,7 +22,7 @@ export default function ReferralCodeField({
         {label}
       </label>
       <div
-        className={`reg-input-with-icon reg-referral-input-wrap${locked ? " reg-referral-locked-wrap" : ""}${hasError ? " reg-input-invalid" : ""}`}
+        className={`reg-input-with-icon reg-referral-input-wrap reg-referral-locked-wrap${hasError ? " reg-input-invalid" : ""}`}
       >
         <span className="reg-input-icon" aria-hidden>
           {icon}
@@ -28,29 +30,27 @@ export default function ReferralCodeField({
         <input
           id={id}
           type="text"
-          className={`input reg-premium-input${locked ? " reg-referral-locked" : ""}`}
+          className="input reg-premium-input reg-referral-locked"
           placeholder={placeholder}
           value={value}
-          readOnly={locked}
-          aria-readonly={locked || undefined}
+          readOnly={readOnly}
+          aria-readonly={readOnly || undefined}
           onChange={onChange}
           onBlur={onBlur}
         />
-        {locked ? (
-          <span
-            className="reg-referral-lock-icon"
-            aria-hidden
-            title="Referral code locked"
-          >
-            🔒
-          </span>
-        ) : null}
+        <span
+          className="reg-referral-lock-icon"
+          aria-hidden
+          title="Referral code locked"
+        >
+          🔒
+        </span>
       </div>
-      {locked ? (
-        <p className="reg-referral-locked-hint" id={`${id}-hint`}>
-          Referral code applied from invite link
-        </p>
-      ) : null}
+      <p className="reg-referral-locked-hint" id={`${id}-hint`}>
+        {fromInviteLink
+          ? "Referral code applied from invite link"
+          : "Platform referral code applied automatically"}
+      </p>
       {hasError ? <div className="reg-field-error">{error}</div> : null}
     </div>
   );
