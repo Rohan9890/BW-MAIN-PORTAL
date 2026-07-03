@@ -10,7 +10,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useBrand } from "../context/BrandContext";
 import { getInitials, useAuth } from "../context/AuthContext";
 import { useNotificationInbox } from "../context/NotificationInboxContext";
-import { adminDashboardApi } from "../services/adminDashboardApi";
+import { adminDashboardApi, toAdminUserStatusMeta, toAdminUserStatusValue } from "../services/adminDashboardApi";
 import { extractProfilePhotoFromPayload, resolveProfilePhotoUrl } from "../utils/mediaUrl";
 import { invalidateDashboardData } from "../services/dashboardInvalidate";
 import { showError, showSuccess } from "../services/toast";
@@ -2051,9 +2051,7 @@ export default function AdminDashboard() {
         { maxAttempts: ACTION_MAX_ATTEMPTS, label: "update user status" },
       );
 
-      const nextStatusMeta = nextActive
-        ? { key: "ACTIVE", label: "Active", pillClass: "active" }
-        : { key: "INACTIVE", label: "Inactive", pillClass: "inactive" };
+      const nextStatusMeta = toAdminUserStatusMeta(nextActive);
 
       setApiAdminUsers((prev) =>
         (Array.isArray(prev) ? prev : []).map((raw) => {
@@ -2063,7 +2061,7 @@ export default function AdminDashboard() {
             ...raw,
             isActive: nextActive,
             enabled: nextActive,
-            status: nextActive ? "ACTIVE" : "INACTIVE",
+            status: toAdminUserStatusValue(nextActive),
           };
         }),
       );

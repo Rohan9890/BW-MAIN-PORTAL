@@ -153,9 +153,25 @@ async function withRetryOnce(fn, meta) {
   }
 }
 
-/** Map UI toggle to backend PATCH `/admin/users/:id/status` body. */
+/** Backend `UserStatus` values supported by PATCH `/admin/users/:id/status`. */
+export const ADMIN_USER_STATUS = {
+  ACTIVE: "ACTIVE",
+  /** Admin "deactivate" maps to backend SUSPENDED (not INACTIVE). */
+  DEACTIVATED: "SUSPENDED",
+};
+
+/** Map UI activate/deactivate toggle to backend status string. */
 export function toAdminUserStatusValue(active) {
-  return active ? "ACTIVE" : "INACTIVE";
+  return active
+    ? ADMIN_USER_STATUS.ACTIVE
+    : ADMIN_USER_STATUS.DEACTIVATED;
+}
+
+/** Optimistic table/modal pill after a status toggle succeeds. */
+export function toAdminUserStatusMeta(active) {
+  return active
+    ? { key: "ACTIVE", label: "Active", pillClass: "active" }
+    : { key: "SUSPENDED", label: "Suspended", pillClass: "suspended" };
 }
 
 export const adminDashboardApi = {
@@ -305,7 +321,7 @@ export const adminDashboardApi = {
     }
   },
 
-  /** PATCH /admin/users/:id/status — body: { status: "ACTIVE" | "INACTIVE" } */
+  /** PATCH /admin/users/:id/status — body: { status: "ACTIVE" | "SUSPENDED" | ... } */
   async updateUserStatus(id, active) {
     return backendJson(
       `/admin/users/${encodeURIComponent(String(id))}/status`,
