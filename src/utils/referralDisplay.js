@@ -19,3 +19,33 @@ export function normalizeReferredByDisplay(raw) {
 export function isDirectSignup(value) {
   return normalizeReferredByDisplay(value) === DIRECT_SIGNUP_LABEL;
 }
+
+/** Resolve referred-by from admin user API rows (string, object, or legacy id fields). */
+export function extractReferredByFromUser(user) {
+  if (!user || typeof user !== "object") {
+    return normalizeReferredByDisplay("");
+  }
+
+  const referredBy = user.referredBy;
+  if (typeof referredBy === "string") {
+    return normalizeReferredByDisplay(referredBy);
+  }
+  if (referredBy && typeof referredBy === "object") {
+    return normalizeReferredByDisplay(
+      referredBy.userId ??
+        referredBy.id ??
+        referredBy.code ??
+        referredBy.referralCode ??
+        referredBy.email ??
+        referredBy.name,
+    );
+  }
+
+  return normalizeReferredByDisplay(
+    user.referredByUserId ??
+      user.referrerUserId ??
+      user.referrerId ??
+      user.referralCode ??
+      user.referredByCode,
+  );
+}

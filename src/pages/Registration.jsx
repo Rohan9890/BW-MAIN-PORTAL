@@ -308,7 +308,7 @@ export default function Registration() {
       return;
     }
 
-    const entityType = type === "organization" ? "ADMIN" : "INDIVIDUAL";
+    const entityType = type === "organization" ? "ORGANIZATION" : "INDIVIDUAL";
 
     const mappedName =
       type === "organization" ? formData.orgName : formData.fullName;

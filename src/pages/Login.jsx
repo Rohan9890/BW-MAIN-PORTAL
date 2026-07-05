@@ -7,6 +7,7 @@ import { useAuth } from "../context/AuthContext";
 import { adminAuthBackend, authBackend } from "../services/backendApis";
 import { getApiErrorMessage } from "../services/backendClient";
 import { isAuthTokenDebugEnabled } from "../services/apiConfig";
+import { canAccessAdminPanel } from "../utils/adminRoles";
 import { showSuccess, showError } from "../services/toast";
 
 /** Unwrap common backend shapes after `backendJson` envelope peel — trim once here. */
@@ -242,9 +243,9 @@ export default function Login() {
       localStorage.removeItem("login_pending_email");
 
       showSuccess("Login successful");
-      /** Navigate after token + profile hydrate complete — avoids racing global 401 handlers. */
-      const normalizedRole = String(role || "").toUpperCase();
-      if (normalizedRole === "ROLE_ADMIN" || normalizedRole === "ROLE_OWNER") {
+      /** Navigate using hydrated role (JWT / profile), not OTP payload alone. */
+      const effectiveRole = window.localStorage.getItem("ui-role") || "";
+      if (canAccessAdminPanel(effectiveRole)) {
         navigate("/admin");
       } else {
         navigate("/dashboard");

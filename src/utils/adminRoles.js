@@ -4,6 +4,8 @@ export const ADMIN_PANEL_ROLES = new Set(["ROLE_ADMIN", "ROLE_OWNER"]);
 /** Roles allowed to send admin invites (OWNER may invite ADMIN or OWNER). */
 export const ADMIN_INVITE_ROLES = new Set(["ROLE_ADMIN", "ROLE_OWNER"]);
 
+import { extractAdminUserExternalId, isOrganizationExternalId } from "./userExternalId";
+
 export const ADMIN_UNKNOWN_USER_LABEL = "Unknown User";
 export const ADMIN_MISSING_FIELD_LABEL = "—";
 
@@ -83,8 +85,24 @@ export function extractRawRoleLabel(raw) {
 }
 
 /**
+ * Access-control panel role — ORG is account type only, never a panel role.
+ * USER and ORG accounts both map to ROLE_USER for counts and RBAC.
+ */
+export function normalizeAccessPanelRole(value) {
+  const normalized = normalizePanelRole(value);
+  if (!normalized) return "";
+  if (normalized === "ROLE_ORG") return "ROLE_USER";
+  return normalized;
+}
+
+/** True for admin-dashboard access (ADMIN or OWNER). */
+export function isAdminLevelRole(role) {
+  return canAccessAdminPanel(role);
+}
+
+/**
  * Resolve panel role from root, nested user/profile, or Spring Security authorities.
- * @returns {string} ROLE_USER | ROLE_ORG | ROLE_ADMIN | ROLE_OWNER | ""
+ * @returns {string} ROLE_USER | ROLE_ADMIN | ROLE_OWNER | ""
  */
 export function extractRoleFromRawUser(raw) {
   if (!raw || typeof raw !== "object") return "";
@@ -94,7 +112,7 @@ export function extractRoleFromRawUser(raw) {
       typeof entry === "string"
         ? entry
         : entry?.authority ?? entry?.role ?? entry?.name;
-    const normalized = normalizePanelRole(roleName);
+    const normalized = normalizeAccessPanelRole(roleName);
     if (normalized === "ROLE_OWNER" || normalized === "ROLE_ADMIN") {
       return normalized;
     }
@@ -107,7 +125,7 @@ export function extractRoleFromRawUser(raw) {
     "userRole",
     "adminRole",
   ]);
-  const fromFields = normalizePanelRole(direct);
+  const fromFields = normalizeAccessPanelRole(direct);
   if (fromFields) return fromFields;
 
   for (const entry of readAuthorities(raw)) {
@@ -115,12 +133,12 @@ export function extractRoleFromRawUser(raw) {
       typeof entry === "string"
         ? entry
         : entry?.authority ?? entry?.role ?? entry?.name;
-    const normalized = normalizePanelRole(roleName);
+    const normalized = normalizeAccessPanelRole(roleName);
     if (normalized) return normalized;
   }
 
   const legacyType = firstUsableFromNodes(nodes, ["type"]);
-  return normalizePanelRole(legacyType);
+  return normalizeAccessPanelRole(legacyType);
 }
 
 export function extractNameFromRawUser(raw) {
@@ -241,13 +259,24 @@ export function toApiRole(value) {
   return normalized.replace(/^ROLE_/, "");
 }
 
-import { extractAdminUserExternalId, isOrganizationExternalId } from "./userExternalId";
+function readAccountTypeRoleMarker(user) {
+  const nodes = collectUserRecordNodes(user);
+  const raw = firstUsableFromNodes(nodes, [
+    "role",
+    "userRole",
+    "panelRole",
+    "accountType",
+    "entityType",
+    "userType",
+  ]);
+  return normalizePanelRole(raw);
+}
 
 /** True when row represents an organization account (supports legacy USR- org rows). */
 export function isOrganizationAccount(user) {
   if (!user || typeof user !== "object") return false;
 
-  if (extractRoleFromRawUser(user) === "ROLE_ORG") return true;
+  if (readAccountTypeRoleMarker(user) === "ROLE_ORG") return true;
   if (isOrganizationExternalId(extractAdminUserExternalId(user))) return true;
 
   const nodes = collectUserRecordNodes(user);

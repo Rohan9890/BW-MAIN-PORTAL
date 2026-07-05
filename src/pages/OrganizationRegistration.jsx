@@ -266,7 +266,7 @@ export default function OrganizationRegistration() {
       payload.append("documentNumber", documentNumber);
       payload.append(
         "entityType",
-        type === "organization" ? "Organization" : "Individual",
+        type === "organization" ? "ORGANIZATION" : "INDIVIDUAL",
       );
       payload.append(
         "name",

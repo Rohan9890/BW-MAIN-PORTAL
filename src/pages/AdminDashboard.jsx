@@ -34,6 +34,7 @@ import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, getDeacti
 import { buildCsvContent } from "../utils/csvExport";
 import {
   DIRECT_SIGNUP_LABEL,
+  extractReferredByFromUser,
   isDirectSignup,
   normalizeReferredByDisplay,
 } from "../utils/referralDisplay";
@@ -391,7 +392,12 @@ function pickAccountStatusMeta(user) {
   if (locked)
     return { key: "SUSPENDED", label: "Suspended", pillClass: "suspended" };
 
-  const sRaw = user.status ?? user.accountStatus;
+  const sRaw =
+    user.userStatus ??
+    user.status ??
+    user.accountStatus ??
+    user.user?.userStatus ??
+    user.profile?.userStatus;
   if (sRaw !== undefined && sRaw !== null && String(sRaw).trim()) {
     const u = String(sRaw).trim().toUpperCase();
     if (u === "ACTIVE" || u === "ENABLED" || u === "ACTIVATED")
@@ -493,13 +499,7 @@ function normalizeAdminUserRow(user) {
   const ticketCount = pickOptionalTicketCount(user);
   const ticketsNav = pickTicketsNavQueryParts(user);
 
-  const referredByNested = user?.referredBy;
-  const referredByUserId = normalizeReferredByDisplay(
-    user?.referredByUserId ??
-      user?.referrerUserId ??
-      referredByNested?.userId ??
-      referredByNested?.id,
-  );
+  const referredByUserId = extractReferredByFromUser(user);
 
   return {
     ...user,
@@ -841,7 +841,7 @@ export default function AdminDashboard() {
   }, []);
 
   const { brand, setBrand, resetBrand, defaultBrand } = useBrand();
-  const { profile: user, logout, role } = useAuth();
+  const { profile: user, logout, role, authLoading } = useAuth();
   const authProfile = user;
   const rawPhoto = extractProfilePhotoFromPayload(user);
   const profilePhotoUrl = rawPhoto ? resolveProfilePhotoUrl(rawPhoto) : "";
@@ -859,17 +859,15 @@ export default function AdminDashboard() {
 
   // RBAC guard (backend is source of truth; UI must not spam retries for non-admin roles).
   useEffect(() => {
-    const normalized = String(
-      role || window.localStorage.getItem("ui-role") || "",
-    ).toUpperCase();
-    if (normalized && !canAccessAdminPanel(normalized)) {
+    if (authLoading || !role) return;
+    if (!canAccessAdminPanel(role)) {
       showError("Unauthorized: admin access required");
       navigate("/dashboard", {
         replace: true,
         state: { message: "Unauthorized: admin access required" },
       });
     }
-  }, [role, navigate]);
+  }, [role, authLoading, navigate]);
 
   // ── Data layer ──────────────────────────────────────────────────────────────
   // NOTE: Admin dashboard must use real backend endpoints only. Legacy `useAdminDashboard`

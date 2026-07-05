@@ -17,6 +17,7 @@ import {
   isRoleChangeAllowed,
   isSameUserRow,
   normalizePanelRole,
+  normalizeAccessPanelRole,
   resolveAdminUserDisplayName,
   resolveAdminUserTypeLabel,
 } from "./adminRoles";
@@ -49,7 +50,13 @@ describe("adminRoles extractors", () => {
       extractRoleFromRawUser({
         user: { userRole: "ORG" },
       }),
-    ).toBe("ROLE_ORG");
+    ).toBe("ROLE_USER");
+  });
+
+  it("normalizeAccessPanelRole maps ORG account type to ROLE_USER", () => {
+    expect(normalizeAccessPanelRole("ORG")).toBe("ROLE_USER");
+    expect(normalizeAccessPanelRole("ROLE_ORG")).toBe("ROLE_USER");
+    expect(normalizeAccessPanelRole("ROLE_OWNER")).toBe("ROLE_OWNER");
   });
 
   it("extractNameFromRawUser prefers firstName + lastName", () => {

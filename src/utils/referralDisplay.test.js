@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildCsvContent, escapeCsvCell } from "./csvExport";
 import {
   DIRECT_SIGNUP_LABEL,
+  extractReferredByFromUser,
   isDirectSignup,
   normalizeReferredByDisplay,
 } from "./referralDisplay";
@@ -22,6 +23,17 @@ describe("referralDisplay", () => {
   it("isDirectSignup detects canonical label only", () => {
     expect(isDirectSignup(DIRECT_SIGNUP_LABEL)).toBe(true);
     expect(isDirectSignup("USR-1")).toBe(false);
+  });
+
+  it("extractReferredByFromUser reads string, object, and legacy fields", () => {
+    expect(extractReferredByFromUser({ referredBy: "USR-123" })).toBe("USR-123");
+    expect(
+      extractReferredByFromUser({ referredBy: { userId: "ORG-456" } }),
+    ).toBe("ORG-456");
+    expect(
+      extractReferredByFromUser({ referredByUserId: "ADM-789" }),
+    ).toBe("ADM-789");
+    expect(extractReferredByFromUser({})).toBe(DIRECT_SIGNUP_LABEL);
   });
 });
 

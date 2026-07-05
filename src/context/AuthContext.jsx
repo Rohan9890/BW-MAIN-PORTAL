@@ -51,12 +51,19 @@ function toCanonicalRole(raw) {
   const s = String(raw || "").trim().toUpperCase();
   if (!s) return "";
   if (s.includes("ROLE_OWNER") || s === "OWNER") return "ROLE_OWNER";
-  if (s.includes("ROLE_ADMIN")) return "ROLE_ADMIN";
-  if (s.includes("ROLE_USER")) return "ROLE_USER";
-  if (s === "ADMIN") return "ROLE_ADMIN";
-  if (s === "USER") return "ROLE_USER";
+  if (s.includes("ROLE_ADMIN") || s === "ADMIN") return "ROLE_ADMIN";
+  /** ORG is account type — never an access-control panel role. */
+  if (s.includes("ROLE_ORG") || s === "ORG") return "ROLE_USER";
+  if (s.includes("ROLE_USER") || s === "USER") return "ROLE_USER";
   if (s.startsWith("ROLE_")) return s;
   return "";
+}
+
+function resolveSessionRole({ token, profile, storedRole } = {}) {
+  const fromJwt = token ? deriveRoleFromJwt(token) : "";
+  const fromProfile = profile ? deriveRoleFromProfile(profile) : "";
+  const stored = toCanonicalRole(storedRole);
+  return fromJwt || fromProfile || stored || "";
 }
 
 function deriveRoleFromJwt(accessToken) {
@@ -284,14 +291,15 @@ export function AuthProvider({ children }) {
       const next = data ? normalizeProfilePayload(data) : null;
       setProfile(next);
       writeProfile(next);
-      /** If `ui-role` is missing (e.g. refresh after a backend that omits role on verify-otp), derive from profile once. */
-      const fromProfile = deriveRoleFromProfile(next);
-      if (fromProfile) {
-        const existing = window.localStorage.getItem(ROLE_KEY) || "";
-        if (!existing) {
-          window.localStorage.setItem(ROLE_KEY, fromProfile);
-          setRole(fromProfile);
-        }
+      const existing = window.localStorage.getItem(ROLE_KEY) || "";
+      const effective = resolveSessionRole({
+        token: currentToken,
+        profile: next,
+        storedRole: existing,
+      });
+      if (effective) {
+        window.localStorage.setItem(ROLE_KEY, effective);
+        setRole(effective);
       }
       return next;
     } catch (err) {
@@ -336,8 +344,11 @@ export function AuthProvider({ children }) {
        * Without `ui-role`, `ProtectedRoute` treated the session as corrupt and sent
        * users to "Session invalid" with a token present.
        */
-      let effectiveRole =
-        toCanonicalRole(explicitRole) || deriveRoleFromJwt(trimmedToken) || "";
+      let effectiveRole = resolveSessionRole({
+        token: trimmedToken,
+        profile: null,
+        storedRole: explicitRole,
+      });
 
       if (effectiveRole) window.localStorage.setItem(ROLE_KEY, effectiveRole);
       setRole(effectiveRole);
@@ -353,9 +364,13 @@ export function AuthProvider({ children }) {
        */
       try {
         const nextProfile = await hydrateProfile();
-        const fromProfile = deriveRoleFromProfile(nextProfile);
-        if (!effectiveRole && fromProfile) {
-          effectiveRole = fromProfile;
+        const refreshed = resolveSessionRole({
+          token: trimmedToken,
+          profile: nextProfile,
+          storedRole: window.localStorage.getItem(ROLE_KEY) || effectiveRole,
+        });
+        if (refreshed && refreshed !== effectiveRole) {
+          effectiveRole = refreshed;
           window.localStorage.setItem(ROLE_KEY, effectiveRole);
           setRole(effectiveRole);
         }
@@ -421,24 +436,25 @@ export function AuthProvider({ children }) {
       setAuthLoading(true);
       try {
         const t = window.localStorage.getItem(TOKEN_KEY);
-        let r = window.localStorage.getItem(ROLE_KEY) || "";
-        if (t && !r) {
-          const derived = deriveRoleFromJwt(t);
-          if (derived) {
-            window.localStorage.setItem(ROLE_KEY, derived);
-            if (active) setRole(derived);
-            r = derived;
-          }
-        }
+        const storedRole = window.localStorage.getItem(ROLE_KEY) || "";
+        let profileSnapshot = null;
         try {
-          await hydrateProfile();
+          profileSnapshot = await hydrateProfile();
         } catch {
           // If token exists but profile fetch fails, keep UI usable; pages can show errors.
         }
-        if (
+        const effective = resolveSessionRole({
+          token: t,
+          profile: profileSnapshot,
+          storedRole: storedRole,
+        });
+        if (active && effective) {
+          window.localStorage.setItem(ROLE_KEY, effective);
+          setRole(effective);
+        } else if (
           active &&
           window.localStorage.getItem(TOKEN_KEY) &&
-          !window.localStorage.getItem(ROLE_KEY)
+          !effective
         ) {
           const fallback = "ROLE_USER";
           window.localStorage.setItem(ROLE_KEY, fallback);
