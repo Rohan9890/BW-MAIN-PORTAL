@@ -3,6 +3,7 @@ import { adminRoleBackend } from "../services/adminRoleBackend";
 import { getApiErrorMessage } from "../services/backendClient";
 import { showError, showSuccess } from "../services/toast";
 import AdminUserRoleBadge from "./AdminUserRoleBadge";
+import { pickAdminUserPatchId } from "../utils/adminUserDto";
 import {
   extractRowPanelRole,
   getAllowedTargetRoles,
@@ -65,9 +66,7 @@ export default function AdminRoleChangeModal({
 
   const displayName =
     targetUser?.displayName || targetUser?.name || targetUser?.email || "User";
-  const targetUserId = String(
-    targetUser?.userId || targetUser?.id || "",
-  ).trim();
+  const targetUserId = pickAdminUserPatchId(targetUser);
 
   useEffect(() => {
     if (!open) {
@@ -152,14 +151,9 @@ export default function AdminRoleChangeModal({
         verifyRes?.data?.token ??
         verifyRes?.token ??
         "";
-      if (!token) {
-        throw new Error(
-          "OTP verified but role-change authorization missing. Contact support.",
-        );
-      }
       await adminRoleBackend.updateUserRole(targetUserId, {
         role: nextRole,
-        roleChangeActionToken: token,
+        ...(token ? { roleChangeActionToken: token } : {}),
       });
       showSuccess(`${displayName} is now ${nextRole}`);
       onRoleChanged?.();

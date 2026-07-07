@@ -4,6 +4,8 @@ import {
   DIRECT_SIGNUP_LABEL,
   extractReferredByFromUser,
   isDirectSignup,
+  isLegacyReferralCode,
+  normalizeReferralCodeDisplay,
   normalizeReferredByDisplay,
 } from "./referralDisplay";
 
@@ -23,6 +25,14 @@ describe("referralDisplay", () => {
   it("isDirectSignup detects canonical label only", () => {
     expect(isDirectSignup(DIRECT_SIGNUP_LABEL)).toBe(true);
     expect(isDirectSignup("USR-1")).toBe(false);
+  });
+
+  it("preserves legacy REF codes during migration", () => {
+    expect(isLegacyReferralCode("REF-ABC12345")).toBe(true);
+    expect(normalizeReferralCodeDisplay("REF-ABC12345")).toBe("REF-ABC12345");
+    expect(extractReferredByFromUser({ referredBy: "REF-OLD123" })).toBe(
+      "REF-OLD123",
+    );
   });
 
   it("extractReferredByFromUser reads string, object, and legacy fields", () => {

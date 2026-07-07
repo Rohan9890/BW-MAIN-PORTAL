@@ -1,6 +1,23 @@
 /** Canonical label when a user has no referral attribution. */
 export const DIRECT_SIGNUP_LABEL = "Direct Signup";
 
+/** Legacy referral prefix — display as-is during backend migration. */
+export const LEGACY_REFERRAL_RE = /^REF-/i;
+
+export function isLegacyReferralCode(value) {
+  return LEGACY_REFERRAL_RE.test(String(value ?? "").trim());
+}
+
+/**
+ * Normalize referral code for display — trusts backend USR-* / ORG-* when present.
+ * Legacy REF-* codes are shown unchanged (not corrupted to USR-*).
+ */
+export function normalizeReferralCodeDisplay(raw) {
+  const s = String(raw ?? "").trim();
+  if (!s || s === "—") return "";
+  return s;
+}
+
 /**
  * Normalize admin/API referred-by values to a single display string.
  * Empty, null-like, and dash placeholders → DIRECT_SIGNUP_LABEL.

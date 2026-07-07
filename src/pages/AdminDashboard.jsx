@@ -28,9 +28,19 @@ import AdminContactHistoryPanel, {
 import AdminAppsSection from "../components/AdminAppsSection";
 import AdminAnnouncements from "../components/AdminAnnouncements";
 import AdminInviteModal from "../components/AdminInviteModal";
+import AdminEmailChangeOtpModal from "../components/AdminEmailChangeOtpModal";
 import AdminRoleChangeModal from "../components/AdminRoleChangeModal";
 import AdminUserRoleBadge from "../components/AdminUserRoleBadge";
-import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, getDeactivateDisabledReason, ADMIN_UNKNOWN_USER_LABEL, computeAdminUserRoleCounts, extractRawRoleLabel, extractRoleFromRawUser, logDevAdminUsersRoleAudit, normalizePanelRole, resolveAdminUserDisplayName, resolveAdminUserEmail, resolveAdminUserPhone, resolveAdminUserTypeLabel } from "../utils/adminRoles";
+import { canAccessAdminPanel, canActorManageUserRole, canInviteAdmins, getDeactivateDisabledReason, ADMIN_UNKNOWN_USER_LABEL, extractRawRoleLabel, extractRoleFromRawUser, logDevAdminUsersRoleAudit, normalizePanelRole, resolveAdminUserDisplayName, resolveAdminUserEmail, resolveAdminUserPhone, resolveAdminUserTypeLabel } from "../utils/adminRoles";
+import {
+  extractPendingEmail,
+  normalizeAdminUserRow as normalizeAdminUserRowDto,
+  parseAdminUserUpdateResponse,
+  parseEmailChangeRequestResponse,
+  pickAdminUserPatchId,
+  resolveUserAudienceCounts,
+  sortUsersByCreatedAtDesc,
+} from "../utils/adminUserDto";
 import { buildCsvContent } from "../utils/csvExport";
 import {
   DIRECT_SIGNUP_LABEL,
@@ -471,65 +481,32 @@ function validateAdminUserEditForm(form) {
   };
 }
 
-function pickAdminUserPatchId(user) {
-  if (!user) return "";
-  const external = extractAdminUserExternalId(user);
-  if (external) return external;
-  const userId = String(user.userId ?? "").trim();
-  if (userId && userId !== "—") return userId;
-  return String(user.id ?? "").trim();
+function normalizeAdminUserRow(user) {
+  return normalizeAdminUserRowDto(user, {
+    formatJoinedDate,
+    pickKycPill,
+    pickOptionalTicketCount,
+    pickTicketsNavQueryParts,
+  });
 }
 
-function normalizeAdminUserRow(user) {
-  const externalUserId = extractAdminUserExternalId(user);
-  const listId = toStringSafe(user?.id ?? user?.userId, "").trim();
-  const id = listId || externalUserId || "";
-
-  const fullName = resolveAdminUserDisplayName(user);
-  const email = resolveAdminUserEmail(user);
-  const phone = resolveAdminUserPhone(user);
-  const rawRole = extractRawRoleLabel(user);
-  const panelRole = extractRoleFromRawUser(user) || "ROLE_USER";
-
-  const joinedRaw =
-    user?.joinedOn ?? user?.createdAt ?? user?.registeredAt ?? "";
-  const joinedOnDisplay = formatJoinedDate(joinedRaw);
-  const kycPill = pickKycPill(user);
-  const statusMeta = pickAccountStatusMeta(user);
-  const ticketCount = pickOptionalTicketCount(user);
-  const ticketsNav = pickTicketsNavQueryParts(user);
-
-  const referredByUserId = extractReferredByFromUser(user);
-
-  return {
-    ...user,
-    id:
-      id ||
-      (email !== "—" ? email : "") ||
-      fullName ||
-      crypto.randomUUID?.() ||
-      `u_${Math.random()}`,
-    userId: externalUserId || toStringSafe(user?.userId ?? user?.user_id, "").trim() || id,
-    displayName: fullName,
-    name: fullName,
-    fullName,
-    email,
-    phone,
-    joinedOnDisplay,
-    /** Same formatted value as `joinedOnDisplay` for table cells that expect `joinedOn`. */
-    joinedOn: joinedOnDisplay,
-    kycPill,
-    statusMeta,
-    /** Back-compat with dashboard search / CSV — same as account status label. */
-    status: statusMeta.label,
-    ticketCount,
-    ticketsNav,
-    rawRole,
-    panelRole,
-    accountTypeLabel: resolveAdminUserTypeLabel({ ...user, panelRole }),
-    referredByUserId,
-    _raw: user,
-  };
+/** Patch a raw API user row when id/external id matches. */
+function patchMatchingRawUser(prev, targetRow, patchId, patchFn) {
+  return (Array.isArray(prev) ? prev : []).map((raw) => {
+    const rid = String(raw?.id ?? raw?.userId ?? "").trim();
+    const eid = extractAdminUserExternalId(raw) || rid;
+    const targetId = String(targetRow?.id ?? "").trim();
+    const targetExt = String(targetRow?.userId ?? patchId ?? "").trim();
+    if (
+      rid !== targetId &&
+      eid !== patchId &&
+      String(raw?.userId ?? "").trim() !== patchId &&
+      eid !== targetExt
+    ) {
+      return raw;
+    }
+    return patchFn(raw);
+  });
 }
 
 /** Backend-agnostic primary id for routing + merge (never use empty string as a Map key). */
@@ -913,6 +890,8 @@ export default function AdminDashboard() {
   const [apiKycLoading, setApiKycLoading] = useState(false);
   const [kycLoadError, setKycLoadError] = useState(null);
   const [apiAdminUsers, setApiAdminUsers] = useState([]);
+  const [apiAdminStaff, setApiAdminStaff] = useState([]);
+  const [apiOwnerStaff, setApiOwnerStaff] = useState([]);
   const [apiAdminUsersLoading, setApiAdminUsersLoading] = useState(false);
   const [apiAdminUsersLoadError, setApiAdminUsersLoadError] = useState(null);
   const [adminUsersReloadSeq, setAdminUsersReloadSeq] = useState(0);
@@ -1242,7 +1221,7 @@ export default function AdminDashboard() {
     };
   }, [pageKey, refreshAdminTickets]);
 
-  // Admin Users list: GET /admin/users (real API only; no mock rows).
+  // Admin Users list: GET /admin/users + staff endpoints (real API only; no mock rows).
   useEffect(() => {
     if (pageKey !== "users") return;
     let alive = true;
@@ -1250,12 +1229,20 @@ export default function AdminDashboard() {
       setApiAdminUsersLoading(true);
       setApiAdminUsersLoadError(null);
       try {
-        const list = await adminDashboardApi.listUsers();
+        const [users, admins, owners] = await Promise.all([
+          adminDashboardApi.listUsers(),
+          adminDashboardApi.listAdmins(),
+          adminDashboardApi.listOwners(),
+        ]);
         if (!alive) return;
-        setApiAdminUsers(Array.isArray(list) ? list : []);
+        setApiAdminUsers(Array.isArray(users) ? users : []);
+        setApiAdminStaff(Array.isArray(admins) ? admins : []);
+        setApiOwnerStaff(Array.isArray(owners) ? owners : []);
       } catch (err) {
         if (!alive) return;
         setApiAdminUsers([]);
+        setApiAdminStaff([]);
+        setApiOwnerStaff([]);
         setApiAdminUsersLoadError(err?.message || "Could not load users");
         showApiErrorToast("Could not load users", err);
       } finally {
@@ -1314,7 +1301,7 @@ export default function AdminDashboard() {
   const activeTicketReplyRef = useRef({ active: false, seq: 0 });
   const [userSearchText, setUserSearchText] = useState("");
   const [userStatusFilter, setUserStatusFilter] = useState("All");
-  const [userRoleFilter, setUserRoleFilter] = useState("ALL");
+  const [userAudienceTab, setUserAudienceTab] = useState("users");
   const [inviteAdminOpen, setInviteAdminOpen] = useState(false);
   const [roleChangeModalOpen, setRoleChangeModalOpen] = useState(false);
   const [roleChangeTarget, setRoleChangeTarget] = useState(null);
@@ -1328,6 +1315,7 @@ export default function AdminDashboard() {
   });
   const [userEditErrors, setUserEditErrors] = useState({});
   const [userEditSaving, setUserEditSaving] = useState(false);
+  const [emailOtpFlow, setEmailOtpFlow] = useState(null);
   const [contactHistoryUser, setContactHistoryUser] = useState(null);
   const [userStatusUpdatingId, setUserStatusUpdatingId] = useState(null);
   const [userStatusConfirmFor, setUserStatusConfirmFor] = useState(null);
@@ -1539,54 +1527,118 @@ export default function AdminDashboard() {
 
   const normalizedAdminUsersList = useMemo(
     () =>
-      (Array.isArray(apiAdminUsers) ? apiAdminUsers : []).map(
-        normalizeAdminUserRow,
+      sortUsersByCreatedAtDesc(
+        (Array.isArray(apiAdminUsers) ? apiAdminUsers : []).map(
+          normalizeAdminUserRow,
+        ),
       ),
     [apiAdminUsers],
   );
 
-  const userRoleCounts = useMemo(
-    () => computeAdminUserRoleCounts(normalizedAdminUsersList),
-    [normalizedAdminUsersList],
+  const normalizedAdminStaffList = useMemo(
+    () =>
+      sortUsersByCreatedAtDesc(
+        (Array.isArray(apiAdminStaff) ? apiAdminStaff : []).map(
+          normalizeAdminUserRow,
+        ),
+      ),
+    [apiAdminStaff],
   );
+
+  const normalizedOwnerStaffList = useMemo(
+    () =>
+      sortUsersByCreatedAtDesc(
+        (Array.isArray(apiOwnerStaff) ? apiOwnerStaff : []).map(
+          normalizeAdminUserRow,
+        ),
+      ),
+    [apiOwnerStaff],
+  );
+
+  const allNormalizedAdminRows = useMemo(
+    () => [
+      ...normalizedAdminUsersList,
+      ...normalizedAdminStaffList,
+      ...normalizedOwnerStaffList,
+    ],
+    [
+      normalizedAdminUsersList,
+      normalizedAdminStaffList,
+      normalizedOwnerStaffList,
+    ],
+  );
+
+  const userAudienceCounts = useMemo(
+    () =>
+      resolveUserAudienceCounts(summary, {
+        users: normalizedAdminUsersList.length,
+        admins: normalizedAdminStaffList.length,
+        owners: normalizedOwnerStaffList.length,
+      }),
+    [
+      summary,
+      normalizedAdminUsersList.length,
+      normalizedAdminStaffList.length,
+      normalizedOwnerStaffList.length,
+    ],
+  );
+
+  const activeAudienceNormalizedList = useMemo(() => {
+    if (userAudienceTab === "admins") return normalizedAdminStaffList;
+    if (userAudienceTab === "owners") return normalizedOwnerStaffList;
+    return normalizedAdminUsersList;
+  }, [
+    userAudienceTab,
+    normalizedAdminUsersList,
+    normalizedAdminStaffList,
+    normalizedOwnerStaffList,
+  ]);
 
   useEffect(() => {
     if (pageKey !== "users" || apiAdminUsersLoading) return;
-    logDevAdminUsersRoleAudit(normalizedAdminUsersList, {
+    logDevAdminUsersRoleAudit(allNormalizedAdminRows, {
       source: "AdminDashboard.users",
     });
-  }, [pageKey, apiAdminUsersLoading, normalizedAdminUsersList]);
+  }, [pageKey, apiAdminUsersLoading, allNormalizedAdminRows]);
+
+  useEffect(() => {
+    setUsersPage(1);
+  }, [userAudienceTab, userSearchText, userStatusFilter]);
 
   const userManagementRows = useMemo(() => {
     const query = userSearchText.trim().toLowerCase();
-    return normalizedAdminUsersList.filter((user) => {
+    return activeAudienceNormalizedList.filter((user) => {
       const matchesSearch =
         !query ||
-        `${user.id} ${user.userId ?? ""} ${user.name} ${user.email} ${user.phone} ${user.panelRole ?? ""} ${user.accountTypeLabel ?? ""} ${user.referredByUserId ?? ""} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
+        `${user.id} ${user.userId ?? ""} ${user.name} ${user.email} ${user.pendingEmail ?? ""} ${user.phone} ${user.accountTypeLabel ?? ""} ${user.staffRoleLabel ?? ""} ${user.referredByUserId ?? ""} ${user.statusMeta?.label ?? user.status} ${user.kycPill?.label ?? ""}`
           .toLowerCase()
           .includes(query);
       const matchesStatus =
         userStatusFilter === "All" || user.statusMeta?.key === userStatusFilter;
-      const matchesRole =
-        userRoleFilter === "ALL" ||
-        user.panelRole === `ROLE_${userRoleFilter}` ||
-        user.panelRole === userRoleFilter;
-      return matchesSearch && matchesStatus && matchesRole;
+      if (userAudienceTab === "users") {
+        if (
+          user.panelRole === "ROLE_ADMIN" ||
+          user.panelRole === "ROLE_OWNER"
+        ) {
+          return false;
+        }
+      }
+      return matchesSearch && matchesStatus;
     });
   }, [
-    normalizedAdminUsersList,
+    activeAudienceNormalizedList,
     userSearchText,
     userStatusFilter,
-    userRoleFilter,
+    userAudienceTab,
   ]);
 
   const adminUsersDatasetEmpty =
     !apiAdminUsersLoading &&
     !apiAdminUsersLoadError &&
-    normalizedAdminUsersList.length === 0;
+    activeAudienceNormalizedList.length === 0;
   const adminUsersSearchOrFilterEmpty =
     !apiAdminUsersLoading &&
-    normalizedAdminUsersList.length > 0 &&
+    activeAudienceNormalizedList.length > 0 &&
     userManagementRows.length === 0;
 
   const userPageSize = 8;
@@ -1854,10 +1906,6 @@ export default function AdminDashboard() {
   }, [kycDrawerRow, kycRejectFor, kycReuploadFor, pageKey, closeKycDrawer]);
 
   useEffect(() => {
-    setUsersPage(1);
-  }, [userSearchText, userStatusFilter, userRoleFilter]);
-
-  useEffect(() => {
     if (usersPage > totalUserPages) {
       setUsersPage(totalUserPages);
     }
@@ -1990,7 +2038,7 @@ export default function AdminDashboard() {
       const blockReason = getDeactivateDisabledReason(
         role,
         found,
-        normalizedAdminUsersList,
+        allNormalizedAdminRows,
         authProfile,
       );
       if (blockReason) {
@@ -2002,26 +2050,32 @@ export default function AdminDashboard() {
 
     setUserStatusUpdatingId(userId);
     try {
+      const patchId = pickAdminUserPatchId(found) || userId;
       await withRetry(
         async () => {
-          await adminDashboardApi.updateUserStatus(userId, nextActive);
+          await adminDashboardApi.updateUserStatus(patchId, nextActive);
         },
         { maxAttempts: ACTION_MAX_ATTEMPTS, label: "update user status" },
       );
 
       const nextStatusMeta = toAdminUserStatusMeta(nextActive);
 
+      const applyStatusPatch = (raw) => ({
+        ...raw,
+        isActive: nextActive,
+        enabled: nextActive,
+        status: toAdminUserStatusValue(nextActive),
+        userStatus: toAdminUserStatusValue(nextActive),
+      });
+
       setApiAdminUsers((prev) =>
-        (Array.isArray(prev) ? prev : []).map((raw) => {
-          const rid = String(raw?.id ?? raw?.userId ?? "").trim();
-          if (rid !== String(userId)) return raw;
-          return {
-            ...raw,
-            isActive: nextActive,
-            enabled: nextActive,
-            status: toAdminUserStatusValue(nextActive),
-          };
-        }),
+        patchMatchingRawUser(prev, found, patchId, applyStatusPatch),
+      );
+      setApiAdminStaff((prev) =>
+        patchMatchingRawUser(prev, found, patchId, applyStatusPatch),
+      );
+      setApiOwnerStaff((prev) =>
+        patchMatchingRawUser(prev, found, patchId, applyStatusPatch),
       );
       setEditingUser((prev) =>
         prev?.id === userId
@@ -2053,7 +2107,7 @@ export default function AdminDashboard() {
       const blockReason = getDeactivateDisabledReason(
         role,
         found,
-        normalizedAdminUsersList,
+        allNormalizedAdminRows,
         authProfile,
       );
       if (blockReason) {
@@ -2072,7 +2126,7 @@ export default function AdminDashboard() {
       !canActorManageUserRole(
         role,
         targetUser,
-        normalizedAdminUsersList,
+        allNormalizedAdminRows,
         authProfile,
       )
     ) {
@@ -2125,50 +2179,161 @@ export default function AdminDashboard() {
       return;
     }
     setUserEditSaving(true);
-    try {
-      await adminDashboardApi.updateUser(patchId, values);
-      const nextPhone = values.phoneNumber;
-      const nextEmail = values.email;
+    const origEmail = editingUser.email !== "—" ? editingUser.email : "";
+    const origPhone =
+      editingUser.phone !== "—"
+        ? String(editingUser.phone || "").replace(/\D/g, "")
+        : "";
+    const emailChanged = values.email !== origEmail;
+    const phoneChanged = values.phoneNumber !== origPhone;
+
+    const applyPhonePatch = (raw) => ({
+      ...raw,
+      phoneNumber: values.phoneNumber,
+      phone: values.phoneNumber,
+    });
+
+    const applyPendingEmailPatch = (raw, pendingEmail) => ({
+      ...applyPhonePatch(raw),
+      pendingEmail,
+    });
+
+    const patchAllLists = (patchFn) => {
       setApiAdminUsers((prev) =>
-        (Array.isArray(prev) ? prev : []).map((raw) => {
-          const rid = String(raw?.id ?? raw?.userId ?? "").trim();
-          const eid = extractAdminUserExternalId(raw) || rid;
-          if (
-            rid !== String(editingUser.id) &&
-            eid !== patchId &&
-            String(raw?.userId ?? "").trim() !== patchId
-          ) {
-            return raw;
+        patchMatchingRawUser(prev, editingUser, patchId, patchFn),
+      );
+      setApiAdminStaff((prev) =>
+        patchMatchingRawUser(prev, editingUser, patchId, patchFn),
+      );
+      setApiOwnerStaff((prev) =>
+        patchMatchingRawUser(prev, editingUser, patchId, patchFn),
+      );
+    };
+
+    try {
+      if (phoneChanged && !emailChanged) {
+        await adminDashboardApi.updateUser(patchId, {
+          phoneNumber: values.phoneNumber,
+        });
+        patchAllLists(applyPhonePatch);
+        setEditingUser((prev) =>
+          prev ? { ...prev, phone: values.phoneNumber } : prev,
+        );
+        setUserEditForm((prev) => ({ ...prev, phone: values.phoneNumber }));
+        setAdminUsersReloadSeq((s) => s + 1);
+        showSuccess("User updated");
+        return;
+      }
+
+      if (phoneChanged && emailChanged) {
+        await adminDashboardApi.updateUser(patchId, {
+          phoneNumber: values.phoneNumber,
+        });
+        patchAllLists(applyPhonePatch);
+        setEditingUser((prev) =>
+          prev ? { ...prev, phone: values.phoneNumber } : prev,
+        );
+        setUserEditForm((prev) => ({ ...prev, phone: values.phoneNumber }));
+      }
+
+      if (emailChanged) {
+        let parsedRequest = null;
+        try {
+          const res = await adminDashboardApi.requestEmailChange(
+            patchId,
+            values.email,
+          );
+          parsedRequest = parseEmailChangeRequestResponse(res, {
+            newEmail: values.email,
+          });
+        } catch (reqErr) {
+          if (reqErr?.status !== 404 && reqErr?.status !== 405) {
+            throw reqErr;
           }
-          return {
-            ...raw,
-            email: nextEmail,
-            phoneNumber: nextPhone,
-            phone: nextPhone,
-          };
-        }),
-      );
-      setEditingUser((prev) =>
-        prev
-          ? {
+          const legacyRes = await adminDashboardApi.updateUser(
+            patchId,
+            values,
+            { allowEmail: true },
+          );
+          const legacyParsed = parseAdminUserUpdateResponse(legacyRes, {
+            emailChanged: true,
+          });
+          if (legacyParsed.kind === "email_verification_pending") {
+            parsedRequest = {
+              verificationSent: true,
+              pendingEmail: legacyParsed.pendingEmail || values.email,
+              message: legacyParsed.message,
+            };
+          } else if (legacyParsed.kind === "email_updated_direct") {
+            patchAllLists((raw) => ({
+              ...applyPhonePatch(raw),
+              email: legacyParsed.email || values.email,
+            }));
+            setEditingUser((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    email: legacyParsed.email || values.email,
+                    phone: values.phoneNumber,
+                  }
+                : prev,
+            );
+            setUserEditForm((prev) => ({
               ...prev,
-              email: nextEmail,
-              phone: nextPhone,
-            }
-          : prev,
-      );
-      setUserEditForm((prev) => ({
-        ...prev,
-        email: nextEmail,
-        phone: nextPhone,
-      }));
-      setAdminUsersReloadSeq((s) => s + 1);
-      showSuccess("User updated");
+              email: legacyParsed.email || values.email,
+            }));
+            setAdminUsersReloadSeq((s) => s + 1);
+            showSuccess(legacyParsed.message || "User updated");
+            return;
+          } else {
+            throw reqErr;
+          }
+        }
+
+        const pendingEmail =
+          parsedRequest?.pendingEmail || values.email;
+        patchAllLists((raw) => applyPendingEmailPatch(raw, pendingEmail));
+        setEditingUser((prev) =>
+          prev
+            ? {
+                ...prev,
+                pendingEmail,
+                emailVerificationPending: true,
+                phone: values.phoneNumber,
+              }
+            : prev,
+        );
+        setUserEditForm((prev) => ({
+          ...prev,
+          email: origEmail,
+          phone: values.phoneNumber,
+        }));
+        setEmailOtpFlow({
+          userId: patchId,
+          pendingEmail,
+          displayName: editingUser.displayName,
+        });
+        showSuccess(
+          parsedRequest?.message ||
+            "OTP sent to the new email address",
+        );
+        return;
+      }
     } catch (e) {
       showApiErrorToast("Could not update user", e);
     } finally {
       setUserEditSaving(false);
     }
+  };
+
+  const handleEmailOtpVerified = () => {
+    setEmailOtpFlow(null);
+    closeUserEditModal();
+    setAdminUsersReloadSeq((s) => s + 1);
+  };
+
+  const closeEmailOtpFlow = () => {
+    setEmailOtpFlow(null);
   };
 
   const closeUserEditModal = () => {
@@ -2191,6 +2356,8 @@ export default function AdminDashboard() {
       showError("No users to export.");
       return;
     }
+    const typeOrRoleHeader =
+      userAudienceTab === "users" ? "Type" : "Role";
     const header = [
       "ID",
       "Name",
@@ -2198,18 +2365,22 @@ export default function AdminDashboard() {
       "Phone",
       "KYC",
       "Joined",
-      "Role",
+      typeOrRoleHeader,
       "Referred By",
       "Status",
     ];
     const csvBody = rows.map((user) => [
-      user.id,
+      user.userId || user.id,
       user.name,
-      user.email,
+      user.pendingEmail
+        ? `${user.email} (pending: ${user.pendingEmail})`
+        : user.email,
       user.phone,
       user.kycPill?.label ?? "—",
       user.joinedOnDisplay ?? "—",
-      resolveAdminUserTypeLabel(user),
+      userAudienceTab === "users"
+        ? user.accountTypeLabel ?? "USER"
+        : user.staffRoleLabel ?? resolveAdminUserTypeLabel(user),
       user.referredByUserId ?? DIRECT_SIGNUP_LABEL,
       user.statusMeta?.label ?? user.status ?? "—",
     ]);
@@ -2927,12 +3098,18 @@ export default function AdminDashboard() {
         if (apiAdminUsersLoadError) {
           return "Users could not be loaded. Use Retry above or check your connection.";
         }
+        const tabLabel =
+          userAudienceTab === "admins"
+            ? "admins"
+            : userAudienceTab === "owners"
+              ? "owners"
+              : "users";
         if (adminUsersDatasetEmpty)
-          return "No users returned from the server yet.";
+          return `No ${tabLabel} returned from the server yet.`;
         if (adminUsersSearchOrFilterEmpty) {
-          return "No users match your search or filters.";
+          return `No ${tabLabel} match your search or filters.`;
         }
-        return "No users to show.";
+        return `No ${tabLabel} to show.`;
       })();
       return (
         <>
@@ -2940,53 +3117,53 @@ export default function AdminDashboard() {
           <article className="panel users-management-shell">
             <div className="users-metrics-grid users-role-filter-grid">
               <article
-                className={`users-metric-card users-role-filter-card${userRoleFilter === "ALL" ? " users-role-filter-card--active" : ""}`}
+                className={`users-metric-card users-role-filter-card${userAudienceTab === "users" ? " users-role-filter-card--active" : ""}`}
               >
                 <button
                   type="button"
                   className="users-role-filter-btn"
-                  onClick={() => setUserRoleFilter("ALL")}
-                  aria-pressed={userRoleFilter === "ALL"}
+                  onClick={() => setUserAudienceTab("users")}
+                  aria-pressed={userAudienceTab === "users"}
                 >
                   <div className="users-metric-head">
                     <span className="users-metric-icon users-metric-total">
                       <Icon name="users" />
                     </span>
-                    <p>All Users</p>
+                    <p>Users</p>
                   </div>
-                  <strong>{userRoleCounts.all.toLocaleString()}</strong>
+                  <strong>{userAudienceCounts.users.toLocaleString()}</strong>
                 </button>
               </article>
               <article
-                className={`users-metric-card users-role-filter-card${userRoleFilter === "ADMIN" ? " users-role-filter-card--active" : ""}`}
+                className={`users-metric-card users-role-filter-card${userAudienceTab === "admins" ? " users-role-filter-card--active" : ""}`}
               >
                 <button
                   type="button"
                   className="users-role-filter-btn"
-                  onClick={() => setUserRoleFilter("ADMIN")}
-                  aria-pressed={userRoleFilter === "ADMIN"}
+                  onClick={() => setUserAudienceTab("admins")}
+                  aria-pressed={userAudienceTab === "admins"}
                 >
                   <div className="users-metric-head">
                     <span className="users-metric-icon users-metric-admin" />
                     <p>Admins</p>
                   </div>
-                  <strong>{userRoleCounts.admin.toLocaleString()}</strong>
+                  <strong>{userAudienceCounts.admins.toLocaleString()}</strong>
                 </button>
               </article>
               <article
-                className={`users-metric-card users-role-filter-card${userRoleFilter === "OWNER" ? " users-role-filter-card--active" : ""}`}
+                className={`users-metric-card users-role-filter-card${userAudienceTab === "owners" ? " users-role-filter-card--active" : ""}`}
               >
                 <button
                   type="button"
                   className="users-role-filter-btn"
-                  onClick={() => setUserRoleFilter("OWNER")}
-                  aria-pressed={userRoleFilter === "OWNER"}
+                  onClick={() => setUserAudienceTab("owners")}
+                  aria-pressed={userAudienceTab === "owners"}
                 >
                   <div className="users-metric-head">
                     <span className="users-metric-icon users-metric-owner" />
                     <p>Owners</p>
                   </div>
-                  <strong>{userRoleCounts.owner.toLocaleString()}</strong>
+                  <strong>{userAudienceCounts.owners.toLocaleString()}</strong>
                 </button>
               </article>
             </div>
@@ -3064,7 +3241,9 @@ export default function AdminDashboard() {
                     <th scope="col">KYC</th>
                     <th scope="col">Tickets</th>
                     <th scope="col">Joined</th>
-                    <th scope="col">Role</th>
+                    <th scope="col">
+                      {userAudienceTab === "users" ? "Type" : "Role"}
+                    </th>
                     <th scope="col">Referred By</th>
                     <th scope="col">Status</th>
                     <th scope="col">Actions</th>
@@ -3125,7 +3304,7 @@ export default function AdminDashboard() {
                         ? getDeactivateDisabledReason(
                             role,
                             user,
-                            normalizedAdminUsersList,
+                            allNormalizedAdminRows,
                             authProfile,
                           )
                         : "";
@@ -3167,6 +3346,14 @@ export default function AdminDashboard() {
                       </td>
                       <td className="users-col-email">
                         <span className="users-cell-email">{user.email}</span>
+                        {user.pendingEmail ? (
+                          <span
+                            className="users-pending-email-badge"
+                            title={`Pending verification: ${user.pendingEmail}`}
+                          >
+                            Verification pending
+                          </span>
+                        ) : null}
                       </td>
                       <td className="users-col-phone">{user.phone}</td>
                       <td className="users-col-kyc">
@@ -3209,7 +3396,13 @@ export default function AdminDashboard() {
                         {user.joinedOnDisplay}
                       </td>
                       <td className="users-col-role">
-                        <AdminUserRoleBadge user={user} compact />
+                        <AdminUserRoleBadge
+                          user={user}
+                          compact
+                          variant={
+                            userAudienceTab === "users" ? "account" : "staff"
+                          }
+                        />
                       </td>
                       <td className="users-col-referred-by">
                         <span
@@ -3328,9 +3521,39 @@ export default function AdminDashboard() {
                   <span className="kyc-mod-mono">{editingUser.userId || editingUser.id}</span>
                 </p>
                 <div className="users-view-role-row">
-                  <span className="kyc-mod-label">Role</span>
-                  <AdminUserRoleBadge user={editingUser} />
+                  <span className="kyc-mod-label">
+                    {userAudienceTab === "users" ? "Type" : "Role"}
+                  </span>
+                  <AdminUserRoleBadge
+                    user={editingUser}
+                    variant={
+                      userAudienceTab === "users" ? "account" : "staff"
+                    }
+                  />
                 </div>
+                {editingUser.pendingEmail ? (
+                  <div className="users-pending-email-notice" role="status">
+                    <span className="users-pending-email-badge">
+                      Verification pending
+                    </span>
+                    <span className="users-pending-email-detail">
+                      Pending verification: {editingUser.pendingEmail}
+                    </span>
+                    <button
+                      type="button"
+                      className="users-page-btn users-page-btn--verify-email"
+                      onClick={() =>
+                        setEmailOtpFlow({
+                          userId: pickAdminUserPatchId(editingUser),
+                          pendingEmail: editingUser.pendingEmail,
+                          displayName: editingUser.displayName,
+                        })
+                      }
+                    >
+                      Enter OTP
+                    </button>
+                  </div>
+                ) : null}
                 <label className="kyc-mod-label" htmlFor="user-edit-name">
                   Name
                 </label>
@@ -3385,7 +3608,7 @@ export default function AdminDashboard() {
                   {canActorManageUserRole(
                     role,
                     editingUser,
-                    normalizedAdminUsersList,
+                    allNormalizedAdminRows,
                     authProfile,
                   ) ? (
                     <button
@@ -4789,10 +5012,19 @@ export default function AdminDashboard() {
         targetUser={roleChangeTarget}
         toRole={roleChangeToRole}
         actorRole={role}
-        allRows={normalizedAdminUsersList}
+        allRows={allNormalizedAdminRows}
         actorProfile={authProfile}
         actorEmail={user?.email || user?.userEmail || ""}
         onRoleChanged={() => setAdminUsersReloadSeq((n) => n + 1)}
+      />
+
+      <AdminEmailChangeOtpModal
+        open={Boolean(emailOtpFlow)}
+        onClose={closeEmailOtpFlow}
+        userId={emailOtpFlow?.userId ?? ""}
+        pendingEmail={emailOtpFlow?.pendingEmail ?? ""}
+        displayName={emailOtpFlow?.displayName ?? "User"}
+        onVerified={handleEmailOtpVerified}
       />
     </div>
   );

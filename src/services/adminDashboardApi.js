@@ -1,6 +1,7 @@
 import { backendJson, backendMultipart } from "./backendClient";
 import { mockData } from "./mockData";
 import { unwrapKycDetailRecord } from "../utils/kycAdmin";
+import { extractRoleFromRawUser } from "../utils/adminRoles";
 import {
   activityBackend,
   kycAdminBackend,
@@ -106,7 +107,18 @@ function pickBestCountKpi(layers, key) {
 function buildSummaryFlatFromLayers(layers) {
   /** @type {Record<string, unknown>} */
   const flat = {};
-  for (const key of ["totalUsers", "totalApps", "openTickets", "activeUsers"]) {
+  for (const key of [
+    "totalUsers",
+    "totalUserAccounts",
+    "userAccounts",
+    "totalApps",
+    "openTickets",
+    "activeUsers",
+    "adminCount",
+    "totalAdmins",
+    "ownerCount",
+    "totalOwners",
+  ]) {
     const { value } = pickFirstPresentKpi(layers, key);
     if (value !== undefined) flat[key] = value;
   }
@@ -136,12 +148,49 @@ function resolveDashboardActiveUsers(p) {
 
 function normalizeSummaryNumbers(payload) {
   const p = payload && typeof payload === "object" ? payload : {};
+  const totalUsers = toFiniteNumber(
+    p.totalUserAccounts ?? p.userAccounts ?? p.totalUsers,
+    0,
+  );
   return {
-    totalUsers: toFiniteNumber(p.totalUsers, 0),
+    totalUsers,
+    totalUserAccounts: totalUsers,
     activeUsers: resolveDashboardActiveUsers(p),
     totalApps: toFiniteNumber(p.totalApps, 0),
     openTickets: toFiniteNumber(p.openTickets, 0),
+    adminCount: toFiniteNumber(p.adminCount ?? p.totalAdmins, 0),
+    ownerCount: toFiniteNumber(p.ownerCount ?? p.totalOwners, 0),
   };
+}
+
+function unwrapUserList(res) {
+  if (Array.isArray(res)) return res;
+  const data = res?.data ?? res;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.content)) return data.content;
+  if (Array.isArray(data?.items)) return data.items;
+  return unwrapArray(res);
+}
+
+function filterStaffFromUserList(list, panelRole) {
+  return (Array.isArray(list) ? list : []).filter(
+    (u) => extractRoleFromRawUser(u) === panelRole,
+  );
+}
+
+async function fetchAdminUserList(path, query = {}) {
+  const qs = new URLSearchParams();
+  Object.entries(query).forEach(([k, v]) => {
+    if (v !== undefined && v !== null && String(v).trim() !== "") {
+      qs.set(k, String(v));
+    }
+  });
+  const suffix = qs.toString() ? `?${qs.toString()}` : "";
+  const res = await backendJson(`${path}${suffix}`, {
+    method: "GET",
+    suppressGlobalServerErrorToast: true,
+  });
+  return unwrapUserList(res);
 }
 
 async function withRetryOnce(fn, meta) {
@@ -261,27 +310,49 @@ export const adminDashboardApi = {
    * Response may be a bare array or wrapped in `data` / Spring `content` / `items`.
    */
   async listUsers(query = {}) {
-    const qs = new URLSearchParams();
-    Object.entries(query).forEach(([k, v]) => {
-      if (v !== undefined && v !== null && String(v).trim() !== "") {
-        qs.set(k, String(v));
+    return fetchAdminUserList("/admin/users", query);
+  },
+
+  /**
+   * GET /admin/users/admins — ROLE_ADMIN staff.
+   * Rollout fallback: filter ROLE_ADMIN from /admin/users when endpoint is missing.
+   */
+  async listAdmins(query = {}) {
+    try {
+      return await fetchAdminUserList("/admin/users/admins", query);
+    } catch (err) {
+      if (err?.status === 404 || err?.status === 405) {
+        console.warn(
+          "[adminDashboardApi] listAdmins unavailable — falling back to filtered user list",
+        );
+        const all = await fetchAdminUserList("/admin/users", query).catch(
+          () => [],
+        );
+        return filterStaffFromUserList(all, "ROLE_ADMIN");
       }
-    });
-    const suffix = qs.toString() ? `?${qs.toString()}` : "";
-    const res = await backendJson(`/admin/users${suffix}`, {
-      method: "GET",
-      suppressGlobalServerErrorToast: true,
-    });
-    let list;
-    if (Array.isArray(res)) list = res;
-    else {
-      const data = res?.data ?? res;
-      if (Array.isArray(data)) list = data;
-      else if (Array.isArray(data?.content)) list = data.content;
-      else if (Array.isArray(data?.items)) list = data.items;
-      else list = unwrapArray(res);
+      throw err;
     }
-    return list;
+  },
+
+  /**
+   * GET /admin/users/owners — ROLE_OWNER staff.
+   * Rollout fallback: filter ROLE_OWNER from /admin/users when endpoint is missing.
+   */
+  async listOwners(query = {}) {
+    try {
+      return await fetchAdminUserList("/admin/users/owners", query);
+    } catch (err) {
+      if (err?.status === 404 || err?.status === 405) {
+        console.warn(
+          "[adminDashboardApi] listOwners unavailable — falling back to filtered user list",
+        );
+        const all = await fetchAdminUserList("/admin/users", query).catch(
+          () => [],
+        );
+        return filterStaffFromUserList(all, "ROLE_OWNER");
+      }
+      throw err;
+    }
   },
 
   /** GET /admin/users/:id — single user detail (resolves external USR-/ADM- id). */
@@ -293,11 +364,48 @@ export const adminDashboardApi = {
     });
   },
 
-  /** PATCH /admin/users/:id — update profile fields */
-  async updateUser(id, payload) {
+  /** PATCH /admin/users/:id — phone/name updates; email uses OTP flow unless allowEmail rollout flag. */
+  async updateUser(id, payload, options = {}) {
+    const body = { ...(payload ?? {}) };
+    if (!options.allowEmail) delete body.email;
     return backendJson(`/admin/users/${encodeURIComponent(String(id))}`, {
       method: "PATCH",
-      json: payload ?? {},
+      json: body,
+      suppressGlobalServerErrorToast: true,
+    });
+  },
+
+  /** POST /admin/users/request-email-change — sends OTP to NEW email. */
+  async requestEmailChange(userId, newEmail) {
+    return backendJson("/admin/users/request-email-change", {
+      method: "POST",
+      json: {
+        userId: String(userId || "").trim(),
+        newEmail: String(newEmail || "").trim(),
+      },
+      suppressGlobalServerErrorToast: true,
+    });
+  },
+
+  /** POST /admin/users/verify-email-change-otp */
+  async verifyEmailChangeOtp(userId, otp) {
+    return backendJson("/admin/users/verify-email-change-otp", {
+      method: "POST",
+      json: {
+        userId: String(userId || "").trim(),
+        otp: String(otp || "").trim(),
+      },
+      suppressGlobalServerErrorToast: true,
+    });
+  },
+
+  /** POST /admin/users/resend-email-change-otp */
+  async resendEmailChangeOtp(userId) {
+    return backendJson("/admin/users/resend-email-change-otp", {
+      method: "POST",
+      json: {
+        userId: String(userId || "").trim(),
+      },
       suppressGlobalServerErrorToast: true,
     });
   },

@@ -1401,6 +1401,48 @@ html[data-theme="dark"] .skeleton {
   border-color: rgba(109, 40, 217, 0.28);
 }
 
+.users-pending-email-badge {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #92400e;
+  background: #fef3c7;
+  border: 1px solid rgba(146, 64, 14, 0.2);
+  border-radius: 999px;
+}
+
+.users-pending-email-notice {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: #fffbeb;
+  border: 1px solid rgba(146, 64, 14, 0.15);
+  border-radius: 8px;
+}
+
+.users-page-btn--verify-email {
+  margin-top: 10px;
+}
+
+.users-pending-email-detail {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  color: #78350f;
+}
+
+.admin-email-otp-expiry-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+.users-col-email .users-pending-email-badge {
+  display: block;
+  width: fit-content;
+}
+
 .users-role-filter-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   max-width: none;

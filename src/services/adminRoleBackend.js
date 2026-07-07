@@ -29,17 +29,19 @@ export const adminRoleBackend = {
 
   /**
    * PATCH /admin/users/:id/role
-   * @param {string} userId
-   * @param {{ role: "USER"|"ADMIN"|"OWNER", roleChangeActionToken: string }} body
+   * @param {string} userId public external id (USR-* / ORG-* / ADM-*)
+   * @param {{ role: "USER"|"ADMIN"|"OWNER", roleChangeActionToken?: string }} body
    */
   updateUserRole(userId, { role, roleChangeActionToken }) {
     const enc = encodeURIComponent(String(userId || "").trim());
+    const json = {
+      role: String(role || "").trim().toUpperCase(),
+    };
+    const token = String(roleChangeActionToken || "").trim();
+    if (token) json.roleChangeActionToken = token;
     return backendJson(`/admin/users/${enc}/role`, {
       method: "PATCH",
-      json: {
-        role: String(role || "").trim().toUpperCase(),
-        roleChangeActionToken: String(roleChangeActionToken || "").trim(),
-      },
+      json,
       suppressGlobalServerErrorToast: true,
     });
   },
