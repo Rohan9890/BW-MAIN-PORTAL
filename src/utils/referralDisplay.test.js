@@ -7,6 +7,7 @@ import {
   isLegacyReferralCode,
   normalizeReferralCodeDisplay,
   normalizeReferredByDisplay,
+  sanitizeReferredByForDisplay,
 } from "./referralDisplay";
 
 describe("referralDisplay", () => {
@@ -35,6 +36,20 @@ describe("referralDisplay", () => {
     );
   });
 
+  it("hides numeric and ADM referred-by values in admin display", () => {
+    expect(sanitizeReferredByForDisplay("42")).toBe(DIRECT_SIGNUP_LABEL);
+    expect(sanitizeReferredByForDisplay("ADM-12345678")).toBe(
+      DIRECT_SIGNUP_LABEL,
+    );
+    expect(extractReferredByFromUser({ referredByUserId: "ADM-999" })).toBe(
+      DIRECT_SIGNUP_LABEL,
+    );
+    expect(extractReferredByFromUser({ referredBy: "USR-123" })).toBe("USR-123");
+    expect(extractReferredByFromUser({ referredBy: "BWVPL#26" })).toBe(
+      "BWVPL#26",
+    );
+  });
+
   it("extractReferredByFromUser reads string, object, and legacy fields", () => {
     expect(extractReferredByFromUser({ referredBy: "USR-123" })).toBe("USR-123");
     expect(
@@ -42,7 +57,7 @@ describe("referralDisplay", () => {
     ).toBe("ORG-456");
     expect(
       extractReferredByFromUser({ referredByUserId: "ADM-789" }),
-    ).toBe("ADM-789");
+    ).toBe(DIRECT_SIGNUP_LABEL);
     expect(extractReferredByFromUser({})).toBe(DIRECT_SIGNUP_LABEL);
   });
 });

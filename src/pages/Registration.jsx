@@ -9,6 +9,7 @@ import {
   isReferralRegistrationError,
   resolveReferralCodeForSubmit,
   resolveReferralInviteState,
+  buildRegistrationPath,
 } from "../utils/referralStorage";
 import ReferralCodeField from "../components/ReferralCodeField";
 
@@ -233,7 +234,10 @@ export default function Registration() {
     setSubmitError("");
     setSubmitSuccess("");
     navigate(
-      normalized === "organization" ? "/register/organization" : "/register",
+      buildRegistrationPath(
+        normalized === "organization" ? "/register/organization" : "/register",
+        location.search,
+      ),
       { replace: true },
     );
   };

@@ -14,9 +14,11 @@ import {
   DEFAULT_DIRECT_SIGNUP_REFERRAL,
   REFERRAL_LOCKED_STORAGE_KEY,
   REFERRAL_REF_STORAGE_KEY,
+  buildRegistrationPath,
   clearStoredReferralRef,
   isReferralRegistrationError,
   parseReferralFromSearch,
+  preserveReferralSearch,
   resolveReferralCodeForSubmit,
   resolveReferralInviteState,
 } from "./referralStorage";
@@ -45,12 +47,28 @@ describe("referralStorage locked referral system", () => {
   });
 
   it("invite link overrides default and persists locked ref", () => {
-    const state = resolveReferralInviteState("?ref=INVITE1");
-    expect(state.ref).toBe("INVITE1");
+    const state = resolveReferralInviteState("?ref=USR-INVITE1");
+    expect(state.ref).toBe("USR-INVITE1");
     expect(state.locked).toBe(true);
     expect(state.fromInviteLink).toBe(true);
-    expect(sessionStorage.getItem(REFERRAL_REF_STORAGE_KEY)).toBe("INVITE1");
+    expect(sessionStorage.getItem(REFERRAL_REF_STORAGE_KEY)).toBe("USR-INVITE1");
     expect(sessionStorage.getItem(REFERRAL_LOCKED_STORAGE_KEY)).toBe("1");
+  });
+
+  it("restores locked invite ref when URL loses ?ref= (tab switch)", () => {
+    resolveReferralInviteState("?ref=ORG-99999");
+    const state = resolveReferralInviteState("");
+    expect(state.ref).toBe("ORG-99999");
+    expect(state.locked).toBe(true);
+    expect(state.fromInviteLink).toBe(true);
+  });
+
+  it("preserveReferralSearch and buildRegistrationPath keep ref on navigation", () => {
+    expect(preserveReferralSearch("?ref=USR-ABC")).toBe("?ref=USR-ABC");
+    expect(buildRegistrationPath("/register/organization", "?ref=ORG-1")).toBe(
+      "/register/organization?ref=ORG-1",
+    );
+    expect(preserveReferralSearch("")).toBe("");
   });
 
   it("resolveReferralCodeForSubmit falls back to default when field empty", () => {

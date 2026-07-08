@@ -8,6 +8,7 @@ import {
   isReferralRegistrationError,
   resolveReferralCodeForSubmit,
   resolveReferralInviteState,
+  buildRegistrationPath,
 } from "../utils/referralStorage";
 import "./Registration.css";
 
@@ -251,10 +252,7 @@ export default function IndividualRegistration() {
       payload.append("file", selectedDocument);
       payload.append("documentType", documentType);
       payload.append("documentNumber", documentNumber);
-      payload.append(
-        "entityType",
-        type === "organization" ? "Organization" : "Individual",
-      );
+      payload.append("entityType", "INDIVIDUAL");
       payload.append(
         "name",
         formData.fullName || formData.orgName || formData.contactName || "",
@@ -323,7 +321,9 @@ export default function IndividualRegistration() {
           <button
             type="button"
             className="reg-tab"
-            onClick={() => navigate("/register/organization")}
+            onClick={() =>
+              navigate(buildRegistrationPath("/register/organization", location.search))
+            }
           >
             <span className="tab-icon">💼</span>
             Organization Registration

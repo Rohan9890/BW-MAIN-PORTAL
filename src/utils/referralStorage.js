@@ -5,6 +5,10 @@ export const REFERRAL_LOCKED_STORAGE_KEY = "bw-referral-ref-locked";
 /** Default platform referral for direct signup (always locked, not user-editable). */
 export const DEFAULT_DIRECT_SIGNUP_REFERRAL = "BWVPL#26";
 
+/** Founder-approved referral formats (plus legacy REF- during migration). */
+export const FOUNDER_REFERRAL_CODE_RE =
+  /^(BWVPL#\d+|USR-|ORG-|REF-)/i;
+
 export function parseReferralFromSearch(search) {
   const raw =
     typeof search === "string"
@@ -65,17 +69,57 @@ export function clearStoredReferralRef() {
   }
 }
 
+export function isFounderReferralCode(value) {
+  const s = String(value ?? "").trim();
+  if (!s) return false;
+  if (s === DEFAULT_DIRECT_SIGNUP_REFERRAL) return true;
+  return FOUNDER_REFERRAL_CODE_RE.test(s);
+}
+
+/**
+ * Build query string preserving ?ref= for tab switches.
+ * Uses URL first, then locked storage.
+ */
+export function preserveReferralSearch(currentSearch = "") {
+  const fromUrl = parseReferralFromSearch(currentSearch);
+  const ref =
+    fromUrl ||
+    (readReferralLocked() ? readStoredReferralRef() : "");
+  if (!ref || ref === DEFAULT_DIRECT_SIGNUP_REFERRAL) return "";
+  return `?ref=${encodeURIComponent(ref)}`;
+}
+
+/** Registration path with referral query preserved. */
+export function buildRegistrationPath(basePath, currentSearch = "") {
+  const path = String(basePath || "/register").trim() || "/register";
+  return `${path}${preserveReferralSearch(currentSearch)}`;
+}
+
 /**
  * Resolve referral state for registration forms.
  * - Direct signup → default `BWVPL#26`, always locked
  * - `/register?ref=CODE` → invite code overrides default, locked
- * Clears stale storage on direct signup to prevent pollution.
+ * - Tab switch without ?ref= → restore locked storage (never reset invite to default)
  */
 export function resolveReferralInviteState(search) {
   const fromUrl = parseReferralFromSearch(search);
   if (fromUrl) {
     persistReferralRef(fromUrl, { locked: true });
-    return { ref: fromUrl, locked: true, fromInviteLink: true };
+    return {
+      ref: fromUrl,
+      locked: true,
+      fromInviteLink: fromUrl !== DEFAULT_DIRECT_SIGNUP_REFERRAL,
+    };
+  }
+
+  const stored = readStoredReferralRef();
+  const locked = readReferralLocked();
+  if (stored && locked && isFounderReferralCode(stored)) {
+    return {
+      ref: stored,
+      locked: true,
+      fromInviteLink: stored !== DEFAULT_DIRECT_SIGNUP_REFERRAL,
+    };
   }
 
   clearStoredReferralRef();

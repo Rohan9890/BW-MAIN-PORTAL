@@ -9,6 +9,7 @@ import {
   isReferralRegistrationError,
   resolveReferralCodeForSubmit,
   resolveReferralInviteState,
+  buildRegistrationPath,
 } from "../utils/referralStorage";
 
 const REGISTER_URL = buildApiRequestUrl("/register");
@@ -332,7 +333,9 @@ export default function OrganizationRegistration() {
           <button
             type="button"
             className="reg-tab"
-            onClick={() => navigate("/register")}
+            onClick={() =>
+              navigate(buildRegistrationPath("/register", location.search))
+            }
           >
             <span className="tab-icon">👤</span>
             Individual Registration
