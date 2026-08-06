@@ -81,35 +81,19 @@ export const authBackend = {
 };
 
 export const adminAuthBackend = {
-  login({ email, password, secret }) {
-    /**
-     * Backend property is `admin.secret = SUPER_ADMIN_SECRET_Sandeep_2026`. The DTO
-     * field name in the controller has not been confirmed, and the previous shape
-     * `{ email, password, secret }` started returning 401 from
-     * `POST /api/v1.0/admin/auth/login`.
-     *
-     * Send every plausible field-name variant in one body — Spring Boot's default
-     * Jackson config (`failOnUnknownProperties: false`) ignores any keys the DTO
-     * doesn't declare, so whichever name the backend binds to (`secret`,
-     * `adminSecret`, `secretKey`, `adminCode`) will match. Also mirror the value
-     * into an `X-Admin-Secret` header for controllers that read it via
-     * `@RequestHeader`.
-     *
-     * `username` duplicates `email` for DTOs that use `username` as the login id
-     * (still an email address).
-     */
+  /**
+   * Admin login (send OTP) — email + password only.
+   * Authenticated admin APIs use the JWT from verify-otp; no static admin secret.
+   * `username` duplicates `email` for DTOs that use `username` as the login id.
+   */
+  login({ email, password }) {
     const trimmedEmail = typeof email === "string" ? email.trim() : email;
-    const trimmedSecret = typeof secret === "string" ? secret.trim() : secret;
 
     const json = {
       email: trimmedEmail,
       username: trimmedEmail,
       /** Never trim password — spaces may be intentional. */
       password,
-      secret: trimmedSecret,
-      adminSecret: trimmedSecret,
-      secretKey: trimmedSecret,
-      adminCode: trimmedSecret,
     };
 
     if (import.meta.env.DEV) {
@@ -129,11 +113,6 @@ export const adminAuthBackend = {
       );
       // eslint-disable-next-line no-console
       console.log(
-        "secret: length only =",
-        trimmedSecret ? String(trimmedSecret).length : 0,
-      );
-      // eslint-disable-next-line no-console
-      console.log(
         "note: Bearer not attached; credentials mode include (see [API:apiFetch] line)",
       );
       // eslint-disable-next-line no-console
@@ -143,9 +122,6 @@ export const adminAuthBackend = {
     return backendJson("/admin/auth/login", {
       method: "POST",
       json,
-      headers: trimmedSecret
-        ? { "X-Admin-Secret": String(trimmedSecret) }
-        : undefined,
       suppressGlobalServerErrorToast: true,
     })
       .then((data) => {

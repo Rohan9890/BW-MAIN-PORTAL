@@ -2,7 +2,7 @@
  * Single source of truth for API origin + `/api/v1.0` prefix.
  *
  * **`VITE_API_URL`** — canonical backend origin (scheme + host + port only, no path).
- * Example: `https://boldandwise.duckdns.org`
+ * Example: `https://api.yourdomain.com`
  *
  * **`VITE_API_BASE_URL`** — legacy alias for the same value (optional).
  *
@@ -38,7 +38,7 @@ function readApiOriginFromEnv() {
 if (import.meta.env.PROD && !readApiOriginFromEnv()) {
   throw new Error(
     "[BW-PORTAL] VITE_API_URL is required in production. " +
-      "Rebuild with VITE_API_URL set to your backend origin (e.g. http://your-server:8080).",
+      "Rebuild with VITE_API_URL set to your backend origin (e.g. https://api.yourdomain.com).",
   );
 }
 

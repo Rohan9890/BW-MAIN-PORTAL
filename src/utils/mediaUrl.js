@@ -13,13 +13,14 @@ const UUID_FILE_RE =
 
 const LOCALHOST_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?/i;
 
+/** Legacy insecure EC2 asset hosts still embedded in some DTO payloads. */
 const LEGACY_INSECURE_ORIGIN_WITH_PORT = "http://43.205.116.38:8080";
 const LEGACY_INSECURE_ORIGIN = "http://43.205.116.38";
-const PRODUCTION_ASSET_ORIGIN = "https://boldandwise.duckdns.org";
 
 /**
- * Rewrite legacy insecure backend asset origins to the configured API origin.
+ * Rewrite legacy insecure backend asset origins to `VITE_API_URL` (via getApiOrigin).
  * Prevents mixed-content blocks when DTOs still embed the old AWS IP host.
+ * No hardcoded production/CDN fallback — if the API origin is unset, leave the URL unchanged.
  *
  * @param {unknown} url
  * @returns {string}
@@ -27,9 +28,10 @@ const PRODUCTION_ASSET_ORIGIN = "https://boldandwise.duckdns.org";
 export function normalizeAssetUrl(url) {
   if (!url) return "";
 
-  const target = getApiOrigin() || PRODUCTION_ASSET_ORIGIN;
-  return String(url)
-    .trim()
+  const target = getApiOrigin();
+  const raw = String(url).trim();
+  if (!target) return raw;
+  return raw
     .replace(LEGACY_INSECURE_ORIGIN_WITH_PORT, target)
     .replace(LEGACY_INSECURE_ORIGIN, target);
 }

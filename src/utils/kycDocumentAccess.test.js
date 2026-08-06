@@ -1,7 +1,7 @@
 import { beforeAll, describe, it, expect, vi } from "vitest";
 
 beforeAll(() => {
-  vi.stubEnv("VITE_API_URL", "https://boldandwise.duckdns.org");
+  vi.stubEnv("VITE_API_URL", "https://api.example.test");
 });
 import {
   isPresignedS3Url,

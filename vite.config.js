@@ -7,8 +7,11 @@ function trimOrigin(v) {
     .replace(/\/$/, "");
 }
 
-/** Falls back to deployed API when env is unset (same default as `apiConfig.js`). */
-const DEFAULT_PROXY_TARGET = "https://boldandwise.duckdns.org";
+/**
+ * Dev-only proxy fallback when `VITE_API_URL` is unset.
+ * Prefer setting `VITE_API_URL` in `.env.development` for remote backends.
+ */
+const DEFAULT_PROXY_TARGET = "http://localhost:8080";
 
 /**
  * Build-time plugin: abort `npm run build` immediately if VITE_API_URL is missing
@@ -24,7 +27,7 @@ function enforceProductionApiUrl(env, mode) {
         if (!apiUrl) {
           throw new Error(
             "[BW-PORTAL] VITE_API_URL is required for production builds.\n" +
-              "Set VITE_API_URL=http://your-backend:8080 before running npm run build.",
+              "Set VITE_API_URL=https://api.yourdomain.com before running npm run build.",
           );
         }
       }
@@ -42,7 +45,7 @@ export default defineConfig(({ mode }) => {
       proxy: {
         /**
          * When `VITE_API_URL` is **unset**, `getApiOrigin()` is `""` in dev → requests use
-         * same-origin `/api/...` → this proxy → `proxyTarget` (defaults to `DEFAULT_PROXY_TARGET`).
+         * same-origin `/api/...` → this proxy → `proxyTarget` (defaults to local backend).
          * When `VITE_API_URL` is set, the app calls the backend **directly** and does not rely on this proxy.
          */
         "/api": {

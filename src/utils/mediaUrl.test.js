@@ -1,7 +1,9 @@
 import { beforeAll, describe, it, expect, vi } from "vitest";
 
+const API_ORIGIN = "https://api.example.test";
+
 beforeAll(() => {
-  vi.stubEnv("VITE_API_URL", "https://boldandwise.duckdns.org");
+  vi.stubEnv("VITE_API_URL", API_ORIGIN);
 });
 
 import {
@@ -19,13 +21,13 @@ const LEGACY_LOGO_NO_PORT =
 describe("normalizeAssetUrl", () => {
   it("rewrites legacy IP with port to configured HTTPS origin", () => {
     expect(normalizeAssetUrl(LEGACY_LOGO)).toBe(
-      "https://boldandwise.duckdns.org/uploads/apps/logos/example.png",
+      `${API_ORIGIN}/uploads/apps/logos/example.png`,
     );
   });
 
   it("rewrites legacy IP without port to configured HTTPS origin", () => {
     expect(normalizeAssetUrl(LEGACY_LOGO_NO_PORT)).toBe(
-      "https://boldandwise.duckdns.org/uploads/apps/logos/example.png",
+      `${API_ORIGIN}/uploads/apps/logos/example.png`,
     );
   });
 
@@ -43,7 +45,7 @@ describe("normalizeAssetUrl", () => {
 describe("resolveUploadsUrl legacy asset origins", () => {
   it("resolves app logo URLs from legacy IP host over HTTPS", () => {
     expect(resolveUploadsUrl(LEGACY_LOGO)).toBe(
-      "https://boldandwise.duckdns.org/uploads/apps/logos/example.png",
+      `${API_ORIGIN}/uploads/apps/logos/example.png`,
     );
   });
 });
@@ -53,7 +55,7 @@ describe("resolveProfilePhotoUrl legacy asset origins", () => {
     const legacy =
       "http://43.205.116.38:8080/uploads/profile/avatar.png";
     expect(resolveProfilePhotoUrl(legacy)).toBe(
-      "https://boldandwise.duckdns.org/uploads/profile/avatar.png",
+      `${API_ORIGIN}/uploads/profile/avatar.png`,
     );
   });
 });
@@ -63,7 +65,7 @@ describe("resolveKycDocumentUrl legacy asset origins", () => {
     const legacy =
       "http://43.205.116.38:8080/uploads/documents/id-card.png";
     expect(resolveKycDocumentUrl(legacy)).toBe(
-      "https://boldandwise.duckdns.org/uploads/documents/id-card.png",
+      `${API_ORIGIN}/uploads/documents/id-card.png`,
     );
   });
 });
